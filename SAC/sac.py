@@ -1,17 +1,37 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
 import optparse
 import pickle
-from feedforward import FeedForward
 import memory as mem
 from policies import Actor, Critic
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 torch.set_num_threads(1)
+
+
+def select_loss_function(loss_type):
+    """
+    Select and return the appropriate loss function based on the input string.
+
+    Args:
+        loss_type (str): Type of loss function to use
+
+    Returns:
+        callable: Loss function to be used for critic training
+    """
+    loss_functions = {
+        "mse": F.mse_loss,
+        "huber": F.smooth_l1_loss,
+        "mae": F.l1_loss,
+        "mse_weighted": lambda input, target: torch.mean(
+            F.mse_loss(input, target, reduction="none") * 1.0
+        ),
+    }
+
+    return loss_functions.get(loss_type.lower(), F.mse_loss)
 
 
 class UnsupportedSpace(Exception):
@@ -23,7 +43,9 @@ class UnsupportedSpace(Exception):
 
 
 class SACAgent:
-    def __init__(self, observation_space, action_space, **userconfig):
+    def __init__(
+        self, observation_space, action_space, loss_fn=F.mse_loss, **userconfig
+    ):
         if not isinstance(observation_space, spaces.box.Box):
             raise UnsupportedSpace(
                 "Observation space {} incompatible ".format(observation_space)
@@ -35,6 +57,7 @@ class SACAgent:
         self._action_space = action_space
         self._obs_dim = observation_space.shape[0]
         self._action_dim = action_space.shape[0]
+        self.critic_loss_fn = loss_fn
 
         self._config = {
             "discount": 0.99,
@@ -163,8 +186,8 @@ class SACAgent:
             q1 = self.critic1(state, action)
             q2 = self.critic2(state, action)
 
-            critic1_loss = F.mse_loss(q1, q_backup)
-            critic2_loss = F.mse_loss(q2, q_backup)
+            critic1_loss = self.critic_loss_fn(q1, q_backup)
+            critic2_loss = self.critic_loss_fn(q2, q_backup)
 
             self.critic1.optimizer.zero_grad()
             critic1_loss.backward()
@@ -283,6 +306,15 @@ def main():
         help="Number of episodes (default %default)",
     )
     optParser.add_option(
+        "-f",
+        "--loss",
+        action="store",
+        type="string",
+        dest="loss_type",
+        default="mse",
+        help="Loss function type (mse/huber/mae/mse_weighted, default %default)",
+    )
+    optParser.add_option(
         "-u",
         "--update",
         action="store",
@@ -319,9 +351,12 @@ def main():
         torch.manual_seed(random_seed)
         np.random.seed(random_seed)
 
+    critic_loss_fn = select_loss_function(opts.loss_type)
+
     sac = SACAgent(
         env.observation_space,
         env.action_space,
+        critic_loss_fn,
         learning_rate_actor=opts.lr,
         learning_rate_critic=opts.lr,
         update_every=opts.update_every,
