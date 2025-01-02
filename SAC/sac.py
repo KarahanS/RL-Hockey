@@ -59,6 +59,7 @@ class SACAgent:
         self._action_dim = action_space.shape[0]
         self.critic_loss_fn = loss_fn
 
+        # Default configuration
         self._config = {
             "discount": 0.99,
             "buffer_size": int(1e6),
@@ -72,6 +73,16 @@ class SACAgent:
             "learn_alpha": True,  # Whether to learn temperature parameter
             "update_every": 1,
             "epsilon": 1e-6,
+            # PER parameters
+            "use_per": False,
+            "per_alpha": 0.6,  # beta_1 in PER paper
+            "per_beta": 0.4,  # beta_2 in PER paper
+            "per_beta_increment": 0.001,
+            # ERE parameters
+            "use_ere": False,
+            "ere_eta0": 0.996,  # Initial ERE decay rate
+            "ere_etaT": 1.0,  # Final ERE decay rate
+            "ere_c_k_min": 2500,  # Minimum ERE buffer size
         }
         self._config.update(userconfig)
 
@@ -129,8 +140,24 @@ class SACAgent:
         else:
             self.alpha = torch.tensor(self._config["alpha"])
 
-        self.buffer = ReplayMemory(max_size=self._config["buffer_size"])
+        # Initialize replay buffer (PER or standard)
+        if self._config["use_per"]:
+            self.buffer = PrioritizedExperienceReplay(
+                max_size=self._config["buffer_size"],
+                beta_1=self._config["per_alpha"],
+                beta_2=self._config["per_beta"],
+                beta_increment=self._config["per_beta_increment"],
+                epsilon=self._config["epsilon"],
+                use_ere=self._config["use_ere"],
+                eta_0=self._config["ere_eta0"],
+                eta_T=self._config["ere_etaT"],
+                c_k_min=self._config["ere_c_k_min"],
+            )
+        else:
+            self.buffer = ReplayMemory(max_size=self._config["buffer_size"])
+
         self.train_iter = 0
+        self.total_steps = 0  # Track total steps for ERE
 
         # Move networks to device
         self.actor.to(device)
@@ -161,19 +188,33 @@ class SACAgent:
 
     def store_transition(self, transition):
         self.buffer.add_transition(transition)
+        if isinstance(self.buffer, PrioritizedExperienceReplay):
+            self.total_steps += 1
 
     def train(self, iter_fit=32):
         losses = []
 
         for _ in range(iter_fit):
-            # Sample from replay buffer
-            batch = self.buffer.sample(batch=self._config["batch_size"])
+            # Sample from replay buffer with PER/ERE if enabled
+            if isinstance(self.buffer, PrioritizedExperienceReplay):
+                experiences, indices, weights = self.buffer.sample(
+                    batch=self._config["batch_size"], total_steps=self.total_steps
+                )
+                state = torch.FloatTensor(np.stack(experiences[0])).to(device)
+                action = torch.FloatTensor(np.stack(experiences[1])).to(device)
+                reward = torch.FloatTensor(np.stack(experiences[2])[:, None]).to(device)
+                next_state = torch.FloatTensor(np.stack(experiences[3])).to(device)
+                done = torch.FloatTensor(np.stack(experiences[4])[:, None]).to(device)
 
-            state = torch.FloatTensor(np.stack(batch[:, 0])).to(device)
-            action = torch.FloatTensor(np.stack(batch[:, 1])).to(device)
-            reward = torch.FloatTensor(np.stack(batch[:, 2])[:, None]).to(device)
-            next_state = torch.FloatTensor(np.stack(batch[:, 3])).to(device)
-            done = torch.FloatTensor(np.stack(batch[:, 4])[:, None]).to(device)
+                weights = torch.FloatTensor(weights).to(device)
+            else:
+                batch = self.buffer.sample(batch=self._config["batch_size"])
+                state = torch.FloatTensor(np.stack(batch[:, 0])).to(device)
+                action = torch.FloatTensor(np.stack(batch[:, 1])).to(device)
+                reward = torch.FloatTensor(np.stack(batch[:, 2])[:, None]).to(device)
+                next_state = torch.FloatTensor(np.stack(batch[:, 3])).to(device)
+                done = torch.FloatTensor(np.stack(batch[:, 4])[:, None]).to(device)
+                weights = torch.ones_like(reward).to(device)
 
             with torch.no_grad():
                 # Sample next action and compute Q-target
@@ -191,8 +232,13 @@ class SACAgent:
             q1 = self.critic1(state, action)
             q2 = self.critic2(state, action)
 
-            critic1_loss = self.critic_loss_fn(q1, q_backup)
-            critic2_loss = self.critic_loss_fn(q2, q_backup)
+            # Compute TD errors for priority updates
+            td_error1 = q_backup.detach() - q1
+            td_error2 = q_backup.detach() - q2
+
+            # Compute critic losses with importance sampling weights
+            critic1_loss = (td_error1.pow(2) * weights).mean()
+            critic2_loss = (td_error2.pow(2) * weights).mean()
 
             self.critic1.optimizer.zero_grad()
             critic1_loss.backward()
@@ -202,7 +248,17 @@ class SACAgent:
             critic2_loss.backward()
             self.critic2.optimizer.step()
 
-            # Update actor
+            # Update PER priorities if using PER
+            if isinstance(self.buffer, PrioritizedExperienceReplay):
+                new_priorities = abs(
+                    ((td_error1 + td_error2) / 2.0 + self._config["epsilon"])
+                    .detach()
+                    .cpu()
+                    .numpy()
+                )
+                self.buffer.update_priorities(indices, new_priorities)
+
+            # Update actor (using importance sampling weights)
             action_new, log_prob = self.actor.sample(state)
             q1_new = self.critic1(state, action_new)
             q2_new = self.critic2(state, action_new)
@@ -214,7 +270,7 @@ class SACAgent:
             actor_loss.backward()
             self.actor.optimizer.step()
 
-            # Update alpha if necessary
+            # Update alpha if necessary (using importance sampling weights)
             if self._config["learn_alpha"]:
                 alpha_loss = -(
                     self.log_alpha * (log_prob + self.target_entropy).detach()
@@ -338,6 +394,48 @@ def main():
         help="Random seed (default %default)",
     )
 
+    optParser.add_option(
+        "--use_per",
+        action="store_true",
+        dest="use_per",
+        default=False,
+        help="Use Prioritized Experience Replay",
+    )
+    optParser.add_option(
+        "--use_ere",
+        action="store_true",
+        dest="use_ere",
+        default=False,
+        help="Use Emphasizing Recent Experience",
+    )
+    optParser.add_option(
+        "--per_alpha",
+        type="float",
+        dest="per_alpha",
+        default=0.6,
+        help="PER alpha parameter (default: 0.6)",
+    )
+    optParser.add_option(
+        "--per_beta",
+        type="float",
+        dest="per_beta",
+        default=0.4,
+        help="PER beta parameter (default: 0.4)",
+    )
+    optParser.add_option(
+        "--ere_eta0",
+        type="float",
+        dest="ere_eta0",
+        default=0.996,
+        help="ERE initial eta parameter (default: 0.996)",
+    )
+    optParser.add_option(
+        "--ere_min_size",
+        type="int",
+        dest="ere_min_size",
+        default=2500,
+        help="ERE minimum buffer size (default: 2500)",
+    )
     opts, args = optParser.parse_args()
 
     env_name = opts.env_name
@@ -365,6 +463,12 @@ def main():
         learning_rate_actor=opts.lr,
         learning_rate_critic=opts.lr,
         update_every=opts.update_every,
+        use_per=opts.use_per,
+        use_ere=opts.use_ere,
+        per_alpha=opts.per_alpha,
+        per_beta=opts.per_beta,
+        ere_eta0=opts.ere_eta0,
+        ere_c_k_min=opts.ere_min_size,
     )
 
     # Logging variables
@@ -375,7 +479,8 @@ def main():
 
     def save_statistics():
         with open(
-            f"./results/SAC_{env_name}-update{opts.update_every}-t{train_iter}-l{opts.lr}-s{random_seed}-stat.pkl",
+            f"./results/SAC_{env_name}-update{opts.update_every}-t{train_iter}-l{opts.lr}"
+            f"-per{opts.use_per}-ere{opts.use_ere}-s{random_seed}-stat.pkl",
             "wb",
         ) as f:
             pickle.dump(
@@ -386,6 +491,13 @@ def main():
                     "lr": opts.lr,
                     "update_every": opts.update_every,
                     "losses": losses,
+                    "per_enabled": opts.use_per,
+                    "ere_enabled": opts.use_ere,
+                    "buffer_stats": (
+                        sac.buffer.get_statistics()
+                        if hasattr(sac.buffer, "get_statistics")
+                        else None
+                    ),
                 },
                 f,
             )

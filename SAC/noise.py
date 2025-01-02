@@ -2,7 +2,6 @@ from abc import ABC, abstractmethod
 import numpy as np
 from typing import Optional
 from numpy.typing import DTypeLike
-from numpy.fft import irfft, rfftfreq
 from utils import powerlaw_psd_gaussian
 
 # FYI: We do not need to implement ColoredNoiseDist or PinkNoiseDist as they simply use Noise and tanh squashing
