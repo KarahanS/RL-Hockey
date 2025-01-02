@@ -33,6 +33,8 @@ class ReplayMemory:
 
 
 class PrioritizedExperienceReplay(ReplayMemory):
+    """Prioritized Experience Replay implementation using Segment Trees"""
+
     def __init__(
         self,
         max_size=100000,
@@ -40,13 +42,10 @@ class PrioritizedExperienceReplay(ReplayMemory):
         beta_2=0.4,  # beta in PER paper
         beta_increment=0.001,
         epsilon=1e-6,
-        use_ere=False,
-        eta_0=0.996,  # Initial ERE decay rate
-        eta_T=1.0,  # Final ERE decay rate
-        c_k_min=2500,  # Minimum ERE buffer size
     ):
         super().__init__(max_size)
 
+        # Initialize segment trees
         tree_capacity = 1
         while tree_capacity < max_size:
             tree_capacity *= 2
@@ -59,14 +58,6 @@ class PrioritizedExperienceReplay(ReplayMemory):
         self.epsilon = epsilon
         self.max_priority = 1.0
 
-        # ERE parameters
-        self.use_ere = use_ere
-        self.eta_0 = eta_0
-        self.eta_T = eta_T
-        self.c_k_min = c_k_min
-        self.total_steps = 0
-        self.c_k = max_size  # Start with full buffer
-
     def add_transition(self, transitions_new):
         """Add transition with maximum priority"""
         idx = self.current_idx
@@ -76,63 +67,33 @@ class PrioritizedExperienceReplay(ReplayMemory):
         self.sum_tree[idx] = priority
         self.min_tree[idx] = priority
 
-        if self.use_ere:
-            self.total_steps += 1
-
-    def _compute_c_k(self, total_steps):
-        """Compute ERE c_k parameter using the paper's formula"""
-        if self.total_steps == 0 or total_steps == 0:
-            return self.size
-
-        # Compute eta_t
-        eta_t = self.eta_0 + (self.eta_T - self.eta_0) * (
-            self.total_steps / total_steps
-        )
-
-        # Compute c_k using k/K ratio
-        k = self.total_steps
-        K = total_steps
-        c_k = int(self.size * (eta_t ** ((k * 1000) / K)))
-
-        # Ensure c_k stays within bounds
-        c_k = max(self.c_k_min, min(c_k, self.size))
-        return c_k
-
-    def sample(self, batch=1, total_steps=None):
-        """Sample transitions using priorities and ERE weights"""
+    def sample(self, batch=1):
+        """Sample transitions using priorities"""
         if batch > self.size:
             batch = self.size
 
-        # Get effective buffer size for ERE
-        if self.use_ere and total_steps is not None:
-            effective_size = min(self.size, self._compute_c_k(total_steps))
-        else:
-            effective_size = self.size
-
         indices = []
         weights = np.zeros(batch, dtype=np.float32)
-        total_p = self.sum_tree.sum(0, effective_size - 1)
+        total_p = self.sum_tree.sum(0, self.size - 1)
         segment = total_p / batch
 
-        # Sample from segments, considering only recent experiences
+        # Sample from segments using priority
         for i in range(batch):
             a = segment * i
             b = segment * (i + 1)
             mass = np.random.uniform(a, b)
             idx = self.sum_tree.find_prefixsum_idx(mass)
-            if idx >= effective_size:  # Ensure we only sample from recent experiences
-                idx = np.random.randint(0, effective_size)
             indices.append(idx)
 
         indices = np.array(indices)
 
-        # Calculate sampling weights
+        # Calculate importance sampling weights
         p_min = self.min_tree.min() / total_p
-        max_weight = (p_min * effective_size) ** (-self.beta_2)
+        max_weight = (p_min * self.size) ** (-self.beta_2)
 
         for i, idx in enumerate(indices):
             p_sample = self.sum_tree[idx] / total_p
-            weight = (p_sample * effective_size) ** (-self.beta_2)
+            weight = (p_sample * self.size) ** (-self.beta_2)
             weights[i] = weight / max_weight
 
         self.beta_2 = min(1.0, self.beta_2 + self.beta_increment)
@@ -154,7 +115,108 @@ class PrioritizedExperienceReplay(ReplayMemory):
             "size": self.size,
             "max_priority": self.max_priority,
             "beta_2": self.beta_2,
-            "ere_enabled": self.use_ere,
-            "ere_c_k": self.c_k if self.use_ere else None,
-            "total_steps": self.total_steps,
         }
+
+
+class EREPrioritizedExperienceReplay(PrioritizedExperienceReplay):
+    """Prioritized Experience Replay with Emphasized Recent Experience"""
+
+    def __init__(
+        self,
+        max_size=100000,
+        beta_1=0.6,
+        beta_2=0.4,
+        beta_increment=0.001,
+        epsilon=1e-6,
+        eta_0=0.996,
+        eta_T=1.0,
+        c_k_min=2500,
+    ):
+        super().__init__(max_size, beta_1, beta_2, beta_increment, epsilon)
+
+        # ERE parameters
+        self.eta_0 = eta_0
+        self.eta_T = eta_T
+        self.c_k_min = c_k_min
+
+    def _compute_c_k(self, step, total_steps):
+        """Compute ERE c_k parameter using the paper's formula"""
+        if total_steps == 0:
+            return self.size
+
+        k = step
+        K = total_steps
+        # Compute eta_t
+        eta_t = self.eta_0 + (self.eta_T - self.eta_0) * (step / total_steps)
+        # Compute c_k using k/K ratio
+        c_k = int(self.size * (eta_t ** ((k * 1000) / K)))
+
+        # Ensure c_k stays within bounds
+        c_k = max(self.c_k_min, min(c_k, self.size))
+        return c_k
+
+    def _get_recent_indices(self, c_k):
+        """Get indices of most recent c_k transitions"""
+        if self.size < c_k:
+            return range(self.size)
+
+        start_idx = (self.current_idx - c_k) % self.size
+        return [(start_idx + i) % self.size for i in range(c_k)]
+
+    def sample(self, batch=1, step=None, total_steps=None):
+        """Sample transitions using priorities with ERE"""
+        if batch > self.size:
+            batch = self.size
+
+        # Calculate effective size using ERE
+        c_k = self._compute_c_k(step, total_steps)
+        valid_indices = self._get_recent_indices(c_k)
+
+        indices = []
+        weights = np.zeros(batch, dtype=np.float32)
+
+        # Calculate total priority for valid indices
+        total_p = sum(self.sum_tree[idx] for idx in valid_indices)
+        segment = total_p / batch
+
+        # Sample from segments using priority
+        for i in range(batch):
+            a = segment * i
+            b = segment * (i + 1)
+            mass = np.random.uniform(a, b)
+
+            # Find index within valid range
+            cumsum = 0
+            for idx in valid_indices:
+                cumsum += self.sum_tree[idx]
+                if cumsum > mass:
+                    indices.append(idx)
+                    break
+            if len(indices) <= i:  # Fallback: sample randomly from valid range
+                indices.append(np.random.choice(valid_indices))
+
+        indices = np.array(indices)
+
+        # Calculate importance sampling weights
+        p_min = min(self.sum_tree[idx] for idx in valid_indices) / total_p
+        max_weight = (p_min * len(valid_indices)) ** (-self.beta_2)
+
+        for i, idx in enumerate(indices):
+            p_sample = self.sum_tree[idx] / total_p
+            weight = (p_sample * len(valid_indices)) ** (-self.beta_2)
+            weights[i] = weight / max_weight
+
+        self.beta_2 = min(1.0, self.beta_2 + self.beta_increment)
+        return self.transitions[indices], indices, weights
+
+    def get_statistics(self):
+        """Return buffer statistics including ERE parameters"""
+        stats = super().get_statistics()
+        stats.update(
+            {
+                "ere_eta0": self.eta_0,
+                "ere_etaT": self.eta_T,
+                "ere_c_k_min": self.c_k_min,
+            }
+        )
+        return stats

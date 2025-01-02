@@ -157,7 +157,7 @@ class SACAgent:
             self.buffer = ReplayMemory(max_size=self._config["buffer_size"])
 
         self.train_iter = 0
-        self.total_steps = 0  # Track total steps for ERE
+        self.K = 0  # Track total steps for ERE
 
         # Move networks to device
         self.actor.to(device)
@@ -188,17 +188,15 @@ class SACAgent:
 
     def store_transition(self, transition):
         self.buffer.add_transition(transition)
-        if isinstance(self.buffer, PrioritizedExperienceReplay):
-            self.total_steps += 1
 
     def train(self, iter_fit=32):
         losses = []
 
-        for _ in range(iter_fit):
+        for k in range(iter_fit):
             # Sample from replay buffer with PER/ERE if enabled
             if isinstance(self.buffer, PrioritizedExperienceReplay):
                 experiences, indices, weights = self.buffer.sample(
-                    batch=self._config["batch_size"], total_steps=self.total_steps
+                    batch=self._config["batch_size"], step=k, total_steps=self.K
                 )
                 state = torch.FloatTensor(np.stack(experiences[0])).to(device)
                 action = torch.FloatTensor(np.stack(experiences[1])).to(device)
@@ -504,6 +502,7 @@ def main():
 
     # Training loop
     for i_episode in range(1, max_episodes + 1):
+        sac.K = 0
         sac.reset_noise()
         ob, _info = env.reset()
         total_reward = 0
@@ -517,12 +516,15 @@ def main():
 
             total_reward += reward
             sac.store_transition((ob, a, reward, ob_new, done))
+            sac.K += 1
 
             ob = ob_new
             if done or trunc:
                 break
 
-        losses.extend(sac.train(train_iter))
+        # number of updates is the same as episode length K
+        # source: https://arxiv.org/pdf/1906.04009
+        losses.extend(sac.train(sac.K))
         rewards.append(total_reward)
         lengths.append(t)
 
