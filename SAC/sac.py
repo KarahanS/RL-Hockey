@@ -5,7 +5,7 @@ import gymnasium as gym
 from gymnasium import spaces
 import optparse
 import pickle
-import memory as mem
+from memory import ReplayMemory, PrioritizedExperienceReplay
 from policies import Actor, Critic
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -129,7 +129,7 @@ class SACAgent:
         else:
             self.alpha = torch.tensor(self._config["alpha"])
 
-        self.buffer = mem.Memory(max_size=self._config["buffer_size"])
+        self.buffer = ReplayMemory(max_size=self._config["buffer_size"])
         self.train_iter = 0
 
         # Move networks to device
@@ -138,6 +138,11 @@ class SACAgent:
         self.critic2.to(device)
         self.critic1_target.to(device)
         self.critic2_target.to(device)
+
+    def reset_noise(self):
+        """Reset the noise process if it has a reset method"""
+        if hasattr(self.actor.noise, "reset"):
+            self.actor.noise.reset()
 
     def act(self, observation, eval_mode=False):
         observation = torch.FloatTensor(observation).unsqueeze(0).to(device)
@@ -387,6 +392,7 @@ def main():
 
     # Training loop
     for i_episode in range(1, max_episodes + 1):
+        sac.reset_noise()
         ob, _info = env.reset()
         total_reward = 0
 

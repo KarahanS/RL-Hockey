@@ -4,7 +4,7 @@ from segment_tree import SumSegmentTree, MinSegmentTree
 
 
 # class to store transitions
-class Memory:
+class ReplayMemory:
     def __init__(self, max_size=100000):
         self.transitions = np.asarray([])
         self.size = 0
@@ -32,7 +32,7 @@ class Memory:
         return self.transitions[0 : self.size]
 
 
-class PrioritizedExperienceReplay(Memory):
+class PrioritizedExperienceReplay(ReplayMemory):
     def __init__(
         self,
         max_size=100000,
@@ -130,9 +130,7 @@ class PrioritizedExperienceReplay(Memory):
             if self.use_ere:
                 weights[i] *= self._get_ere_weight(idx)
 
-        # Increment beta for annealing
         self.beta = min(1.0, self.beta + self.beta_increment)
-
         return self.transitions[indices], indices, weights
 
     def update_priorities(self, indices, td_errors):
