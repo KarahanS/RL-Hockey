@@ -91,7 +91,13 @@ class Trainer:
         self.run_name = self.get_run_name()
         self.output_dir = Path(self.args.output_dir) / self.run_name
         self.output_dir.mkdir(parents=True, exist_ok=True)
-
+        
+        self.log_file = self.output_dir / "training_log.txt"
+        with open(self.log_file, "w") as f:
+            f.write(f"Training started at {datetime.now()}\n")
+            f.write(f"PID: {os.getpid()}\n")
+            f.write("-" * 50 + "\n")
+            
         # Save configuration
         with open(self.output_dir / "config.json", "w") as f:
             json.dump(vars(self.args), f, indent=4)
@@ -266,9 +272,10 @@ class Trainer:
             if episode % self.args.log_interval == 0:
                 avg_reward = np.mean(self.rewards[-self.args.log_interval :])
                 avg_length = int(np.mean(self.lengths[-self.args.log_interval :]))
-                print(
-                    f"Episode {episode} \t avg length: {avg_length} \t reward: {avg_reward}"
-                )
+                log_msg = f"Episode {episode} \t avg length: {avg_length} \t reward: {avg_reward}"
+                print(log_msg)
+                with open(self.log_file, "a") as f:
+                    f.write(log_msg + "\n")
 
         # Final save
         self.save_checkpoint("final")

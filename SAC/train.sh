@@ -152,24 +152,16 @@ if [ "$USE_ERE" = true ]; then
     CMD="$CMD --use_ere --ere_eta0 $ERE_ETA0 --ere_min_size $ERE_MIN_SIZE"
 fi
 
-# Run the command and capture output
-eval $CMD | tee >(while read line; do
-    # Extract the run directory from the output (it will be printed at the start)
-    if [[ $line == *"results/"* ]]; then
-        run_dir=$(echo "$line" | grep -o "results/[^[:space:]]*")
-        # Create training_log.txt in the run directory
-        echo "$line" >> "${run_dir}/training_log.txt"
-    else
-        # If run_dir exists, append to its log file
-        if [ ! -z "$run_dir" ]; then
-            echo "$line" >> "${run_dir}/training_log.txt"
-        fi
-    fi
-done) &
+# Create error log file with PID
+mkdir -p "${OUTPUT_DIR}"
+ERROR_LOG="${OUTPUT_DIR}/error_pid_$$.log"
+
+# Run the command in background and redirect stderr to error log
+eval $CMD 2> "$ERROR_LOG" > /dev/null &
 
 # Save the process ID
-echo $! > training.pid
-
-echo "Training started in background. PID saved in training.pid"
+PID=$!
+echo "Training started in background. PID: $PID"
 echo "Command executed: $CMD"
 echo "Logs will be saved in the experiment's results directory"
+echo "Check ${ERROR_LOG} for any errors"
