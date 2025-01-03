@@ -41,7 +41,7 @@ class PrioritizedExperienceReplay(ReplayMemory):
         beta_1=0.6,  # alpha in PER paper
         beta_2=0.4,  # beta in PER paper
         beta_increment=0.001,
-        epsilon=1e-6,
+        epsilon=1e-6
     ):
         super().__init__(max_size)
 
@@ -67,7 +67,7 @@ class PrioritizedExperienceReplay(ReplayMemory):
         self.sum_tree[idx] = priority
         self.min_tree[idx] = priority
 
-    def sample(self, batch=1):
+    def sample(self, batch=1, step=None, total_steps=None):
         """Sample transitions using priorities"""
         if batch > self.size:
             batch = self.size
@@ -97,8 +97,15 @@ class PrioritizedExperienceReplay(ReplayMemory):
             weights[i] = weight / max_weight
 
         self.beta_2 = min(1.0, self.beta_2 + self.beta_increment)
-        return self.transitions[indices], indices, weights
+        transitions = self.transitions[indices]
+        states = np.array([t[0] for t in transitions])
+        actions = np.array([t[1] for t in transitions])
+        rewards = np.array([t[2] for t in transitions])
+        next_states = np.array([t[3] for t in transitions])
+        dones = np.array([t[4] for t in transitions])
 
+        return (states, actions, rewards, next_states, dones), indices, weights
+    
     def update_priorities(self, indices, td_errors):
         """Update priorities based on TD errors"""
         priorities = (np.abs(td_errors) + self.epsilon) ** self.beta_1
@@ -207,7 +214,14 @@ class EREPrioritizedExperienceReplay(PrioritizedExperienceReplay):
             weights[i] = weight / max_weight
 
         self.beta_2 = min(1.0, self.beta_2 + self.beta_increment)
-        return self.transitions[indices], indices, weights
+        transitions = self.transitions[indices]
+        states = np.array([t[0] for t in transitions])
+        actions = np.array([t[1] for t in transitions])
+        rewards = np.array([t[2] for t in transitions])
+        next_states = np.array([t[3] for t in transitions])
+        dones = np.array([t[4] for t in transitions])
+
+        return (states, actions, rewards, next_states, dones), indices, weights
 
     def get_statistics(self):
         """Return buffer statistics including ERE parameters"""

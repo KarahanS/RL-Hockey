@@ -4,7 +4,7 @@ import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
 from noise import *
-from memory import ReplayMemory, PrioritizedExperienceReplay
+from memory import ReplayMemory, PrioritizedExperienceReplay, EREPrioritizedExperienceReplay
 from policies import Actor, Critic
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -154,17 +154,25 @@ class SACAgent:
 
         # Initialize replay buffer (PER or standard)
         if self._config["use_per"]:
-            self.buffer = PrioritizedExperienceReplay(
-                max_size=self._config["buffer_size"],
-                beta_1=self._config["per_alpha"],
-                beta_2=self._config["per_beta"],
-                beta_increment=self._config["per_beta_increment"],
-                epsilon=self._config["epsilon"],
-                use_ere=self._config["use_ere"],
-                eta_0=self._config["ere_eta0"],
-                eta_T=self._config["ere_etaT"],
-                c_k_min=self._config["ere_c_k_min"],
-            )
+            if self._config["use_ere"]:
+                self.buffer = EREPrioritizedExperienceReplay(
+                    max_size=self._config["buffer_size"],
+                    beta_1=self._config["per_alpha"],
+                    beta_2=self._config["per_beta"],
+                    beta_increment=self._config["per_beta_increment"],
+                    epsilon=self._config["epsilon"],
+                    eta_0=self._config["ere_eta0"],
+                    eta_T=self._config["ere_etaT"],
+                    c_k_min=self._config["ere_c_k_min"],
+                )
+            else:
+                self.buffer = PrioritizedExperienceReplay(
+                    max_size=self._config["buffer_size"],
+                    beta_1=self._config["per_alpha"],
+                    beta_2=self._config["per_beta"],
+                    beta_increment=self._config["per_beta_increment"],
+                    epsilon=self._config["epsilon"]
+                )
         else:
             self.buffer = ReplayMemory(max_size=self._config["buffer_size"])
 
@@ -210,11 +218,11 @@ class SACAgent:
                 experiences, indices, weights = self.buffer.sample(
                     batch=self._config["batch_size"], step=k, total_steps=self.K
                 )
-                state = torch.FloatTensor(np.stack(experiences[0])).to(device)
-                action = torch.FloatTensor(np.stack(experiences[1])).to(device)
-                reward = torch.FloatTensor(np.stack(experiences[2])[:, None]).to(device)
-                next_state = torch.FloatTensor(np.stack(experiences[3])).to(device)
-                done = torch.FloatTensor(np.stack(experiences[4])[:, None]).to(device)
+                state = torch.FloatTensor(experiences[0]).to(device)  # Already stacked states
+                action = torch.FloatTensor(experiences[1]).to(device)  # Already stacked actions
+                reward = torch.FloatTensor(experiences[2][:, None]).to(device)  # Add dimension for rewards
+                next_state = torch.FloatTensor(experiences[3]).to(device)  # Already stacked next_states
+                done = torch.FloatTensor(experiences[4][:, None]).to(device)  # Add dimension for dones
 
                 weights = torch.FloatTensor(weights).to(device)
             else:

@@ -141,6 +141,13 @@ class Trainer:
             f"Enabled: {self.args.use_ere}",
             f"Eta0: {self.args.ere_eta0}",
             f"Min Size: {self.args.ere_min_size}",
+            "\nNoise Configuration:",
+            f"Type: {self.args.noise_type}",
+            f"Sigma: {self.args.noise_sigma}",
+            f"Theta: {self.args.noise_theta}" if self.args.noise_type == "ornstein" else "",
+            f"dt: {self.args.noise_dt}" if self.args.noise_type == "ornstein" else "",
+            f"Beta: {self.args.noise_beta}" if self.args.noise_type == "colored" else "",
+            f"Sequence Length: {self.args.noise_seq_len}" if self.args.noise_type in ["colored", "pink"] else "",
             "\nLogging Configuration:",
             f"Output Directory: {self.args.output_dir}",
             f"Save Interval: {self.args.save_interval}",
@@ -148,6 +155,9 @@ class Trainer:
             "\nRun Name:",
             self.run_name,
         ]
+
+        # Filter out empty strings
+        summary = [s for s in summary if s != ""]
 
         with open(self.output_dir / "experiment_summary.txt", "w") as f:
             f.write("\n".join(summary))
