@@ -12,6 +12,7 @@ from sac import (
     SACAgent,
     select_loss_function,
 )
+from noise import *
 
 
 class Trainer:
@@ -36,6 +37,7 @@ class Trainer:
     def setup_agent(self):
         """Initialize the SAC agent"""
         critic_loss_fn = select_loss_function(self.args.loss_type)
+
         self.agent = SACAgent(
             self.env.observation_space,
             self.env.action_space,
@@ -49,6 +51,14 @@ class Trainer:
             per_beta=self.args.per_beta,
             ere_eta0=self.args.ere_eta0,
             ere_c_k_min=self.args.ere_min_size,
+            noise={
+                "type": self.args.noise_type,
+                "sigma": self.args.noise_sigma,
+                "theta": self.args.noise_theta,
+                "dt": self.args.noise_dt,
+                "beta": self.args.noise_beta,
+                "seq_len": self.args.noise_seq_len,
+            },
         )
 
     def get_run_name(self):
@@ -94,6 +104,14 @@ class Trainer:
 
         # Create a summary file with hyperparameters
         self.create_summary_file()
+
+        np.savez(
+            self.output_dir / "rewards.npz",
+            rewards=np.array([]),
+            episode_lengths=np.array([]),
+            moving_avg_100=np.array([]),
+            config=json.dumps(vars(self.args)),
+        )
 
     def create_summary_file(self):
         """Create a human-readable summary of the experiment"""
@@ -147,6 +165,20 @@ class Trainer:
 
         with open(self.output_dir / f"statistics_episode_{episode}.pkl", "wb") as f:
             pickle.dump(stats, f)
+
+        moving_avg = (
+            np.convolve(self.rewards, np.ones(100) / 100, mode="valid")
+            if len(self.rewards) >= 100
+            else np.array([])
+        )
+
+        np.savez(
+            self.output_dir / "rewards.npz",
+            rewards=np.array(self.rewards),
+            episode_lengths=np.array(self.lengths),
+            moving_avg_100=moving_avg,
+            config=json.dumps(vars(self.args)),
+        )
 
     def plot_metrics(self):
         """Plot and save training metrics"""
@@ -300,6 +332,35 @@ def parse_args():
         "--save_interval", type=int, default=500, help="Save checkpoint interval"
     )
     parser.add_argument("--log_interval", type=int, default=20, help="Logging interval")
+
+    parser.add_argument(
+        "--noise_type",
+        type=str,
+        default="normal",
+        choices=["normal", "ornstein", "colored", "pink"],
+        help="Type of action noise (normal/ornstein/colored/pink)",
+    )
+    # General noise parameters
+    parser.add_argument(
+        "--noise_sigma", type=float, default=0.1, help="Noise sigma/scale parameter"
+    )
+    # Ornstein-Uhlenbeck specific
+    parser.add_argument(
+        "--noise_theta", type=float, default=0.15, help="OU noise theta parameter"
+    )
+    parser.add_argument(
+        "--noise_dt", type=float, default=1e-2, help="OU noise dt parameter"
+    )
+    # Colored noise specific
+    parser.add_argument(
+        "--noise_beta", type=float, default=1.0, help="Colored noise beta parameter"
+    )
+    parser.add_argument(
+        "--noise_seq_len",
+        type=int,
+        default=1000,
+        help="Sequence length for colored/pink noise",
+    )
 
     return parser.parse_args()
 

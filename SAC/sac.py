@@ -3,8 +3,7 @@ import torch.nn.functional as F
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
-import optparse
-import pickle
+from noise import *
 from memory import ReplayMemory, PrioritizedExperienceReplay
 from policies import Actor, Critic
 
@@ -83,7 +82,19 @@ class SACAgent:
             "ere_eta0": 0.996,  # Initial ERE decay rate
             "ere_etaT": 1.0,  # Final ERE decay rate
             "ere_c_k_min": 2500,  # Minimum ERE buffer size
+            # Noise
+            "noise": {
+                "type": "normal",
+                "sigma": 0.1,
+                "theta": 0.15,
+                "dt": 1e-2,
+                "beta": 1.0,
+                "seq_len": 1000,
+            },
         }
+        if "noise" in userconfig:
+            self._config["noise"].update(userconfig.pop("noise"))
+        # Handle remaining non-noise parameters
         self._config.update(userconfig)
 
         # Initialize networks
@@ -95,6 +106,7 @@ class SACAgent:
             action_space=action_space,
             device=device,
             epsilon=self._config["epsilon"],
+            noise_config=self._config["noise"],
         )
 
         # Two Q-functions to mitigate positive bias in policy improvement
@@ -315,241 +327,3 @@ class SACAgent:
         self.critic2.load_state_dict(state[2])
         self.critic1_target.load_state_dict(state[1])
         self.critic2_target.load_state_dict(state[2])
-
-
-def main():
-    optParser = optparse.OptionParser()
-    optParser.add_option(
-        "-e",
-        "--env",
-        action="store",
-        type="string",
-        dest="env_name",
-        default="Pendulum-v1",
-        help="Environment (default %default)",
-    )
-    optParser.add_option(
-        "-n",
-        "--eps",
-        action="store",
-        type="float",
-        dest="epsilon",
-        default=1e-6,
-        help="Policy noise (default %default)",
-    )
-    optParser.add_option(
-        "-t",
-        "--train",
-        action="store",
-        type="int",
-        dest="train",
-        default=32,
-        help="Number of training batches per episode (default %default)",
-    )
-    optParser.add_option(
-        "-l",
-        "--lr",
-        action="store",
-        type="float",
-        dest="lr",
-        default=0.0001,
-        help="Learning rate (default %default)",
-    )
-    optParser.add_option(
-        "-m",
-        "--maxepisodes",
-        action="store",
-        type="int",
-        dest="max_episodes",
-        default=2000,
-        help="Number of episodes (default %default)",
-    )
-    optParser.add_option(
-        "-f",
-        "--loss",
-        action="store",
-        type="string",
-        dest="loss_type",
-        default="mse",
-        help="Loss function type (mse/huber/mae/mse_weighted, default %default)",
-    )
-    optParser.add_option(
-        "-u",
-        "--update",
-        action="store",
-        type="float",
-        dest="update_every",
-        default=1,
-        help="Target network update frequency (default %default)",
-    )
-    optParser.add_option(
-        "-s",
-        "--seed",
-        action="store",
-        type="int",
-        dest="seed",
-        default=None,
-        help="Random seed (default %default)",
-    )
-
-    optParser.add_option(
-        "--use_per",
-        action="store_true",
-        dest="use_per",
-        default=False,
-        help="Use Prioritized Experience Replay",
-    )
-    optParser.add_option(
-        "--use_ere",
-        action="store_true",
-        dest="use_ere",
-        default=False,
-        help="Use Emphasizing Recent Experience",
-    )
-    optParser.add_option(
-        "--per_alpha",
-        type="float",
-        dest="per_alpha",
-        default=0.6,
-        help="PER alpha parameter (default: 0.6)",
-    )
-    optParser.add_option(
-        "--per_beta",
-        type="float",
-        dest="per_beta",
-        default=0.4,
-        help="PER beta parameter (default: 0.4)",
-    )
-    optParser.add_option(
-        "--ere_eta0",
-        type="float",
-        dest="ere_eta0",
-        default=0.996,
-        help="ERE initial eta parameter (default: 0.996)",
-    )
-    optParser.add_option(
-        "--ere_min_size",
-        type="int",
-        dest="ere_min_size",
-        default=2500,
-        help="ERE minimum buffer size (default: 2500)",
-    )
-    opts, args = optParser.parse_args()
-
-    env_name = opts.env_name
-    if env_name == "LunarLander-v2":
-        env = gym.make(env_name, continuous=True)
-    else:
-        env = gym.make(env_name)
-
-    max_episodes = opts.max_episodes
-    max_timesteps = 2000
-    train_iter = opts.train
-    log_interval = 20
-    random_seed = opts.seed
-
-    if random_seed is not None:
-        torch.manual_seed(random_seed)
-        np.random.seed(random_seed)
-
-    critic_loss_fn = select_loss_function(opts.loss_type)
-
-    sac = SACAgent(
-        env.observation_space,
-        env.action_space,
-        critic_loss_fn,
-        learning_rate_actor=opts.lr,
-        learning_rate_critic=opts.lr,
-        update_every=opts.update_every,
-        use_per=opts.use_per,
-        use_ere=opts.use_ere,
-        per_alpha=opts.per_alpha,
-        per_beta=opts.per_beta,
-        ere_eta0=opts.ere_eta0,
-        ere_c_k_min=opts.ere_min_size,
-    )
-
-    # Logging variables
-    rewards = []
-    lengths = []
-    losses = []
-    timestep = 0
-
-    def save_statistics():
-        with open(
-            f"./results/SAC_{env_name}-update{opts.update_every}-t{train_iter}-l{opts.lr}"
-            f"-per{opts.use_per}-ere{opts.use_ere}-s{random_seed}-stat.pkl",
-            "wb",
-        ) as f:
-            pickle.dump(
-                {
-                    "rewards": rewards,
-                    "lengths": lengths,
-                    "train": train_iter,
-                    "lr": opts.lr,
-                    "update_every": opts.update_every,
-                    "losses": losses,
-                    "per_enabled": opts.use_per,
-                    "ere_enabled": opts.use_ere,
-                    "buffer_stats": (
-                        sac.buffer.get_statistics()
-                        if hasattr(sac.buffer, "get_statistics")
-                        else None
-                    ),
-                },
-                f,
-            )
-
-    # Training loop
-    for i_episode in range(1, max_episodes + 1):
-        sac.K = 0
-        sac.reset_noise()
-        ob, _info = env.reset()
-        total_reward = 0
-
-        for t in range(max_timesteps):
-            timestep += 1
-            done = False
-
-            a = sac.act(ob)
-            ob_new, reward, done, trunc, _info = env.step(a)
-
-            total_reward += reward
-            sac.store_transition((ob, a, reward, ob_new, done))
-            sac.K += 1
-
-            ob = ob_new
-            if done or trunc:
-                break
-
-        # number of updates is the same as episode length K
-        # source: https://arxiv.org/pdf/1906.04009
-        losses.extend(sac.train(sac.K))
-        rewards.append(total_reward)
-        lengths.append(t)
-
-        # Save checkpoint
-        if i_episode % 500 == 0:
-            print("########## Saving a checkpoint... ##########")
-            torch.save(
-                sac.state(),
-                f"./results/SAC_{env_name}_{i_episode}-update{opts.update_every}-t{train_iter}-l{opts.lr}-s{random_seed}.pth",
-            )
-            save_statistics()
-
-        # Logging
-        if i_episode % log_interval == 0:
-            avg_reward = np.mean(rewards[-log_interval:])
-            avg_length = int(np.mean(lengths[-log_interval:]))
-
-            print(
-                "Episode {} \t avg length: {} \t reward: {}".format(
-                    i_episode, avg_length, avg_reward
-                )
-            )
-
-    save_statistics()
-
-
-if __name__ == "__main__":
-    main()
