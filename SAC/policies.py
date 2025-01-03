@@ -46,32 +46,32 @@ class Actor(FeedForward):
                 (action_space.high + action_space.low) / 2
             ).to(device)
 
-        noise_type = noise_config["noise_type"]
+        noise_type = noise_config["type"]
 
         # Set action noise
         if noise_type == "normal":
             self.noise = NormalActionNoise(
                 mean=np.zeros(action_dim),
-                sigma=np.ones(action_dim) * noise_config["noise_sigma"],
+                sigma=np.ones(action_dim) * noise_config["sigma"],
             )
         elif noise_type == "ornstein":
             self.noise = OrnsteinUhlenbeckActionNoise(
                 mean=np.zeros(action_dim),
-                sigma=np.ones(action_dim) * noise_config["noise_sigma"],
+                sigma=np.ones(action_dim) * noise_config["sigma"],
                 theta=noise_config["noise_theta"],
                 dt=noise_config["noise_dt"],
             )
         elif noise_type == "colored":
             self.noise = ColoredActionNoise(
-                beta=noise_config["noise_beta"],
-                sigma=noise_config["noise_sigma"],
-                seq_len=noise_config["noise_seq_len"],
+                beta=noise_config["beta"],
+                sigma=noise_config["sigma"],
+                seq_len=noise_config["seq_len"],
                 action_dim=action_dim,
             )
         elif noise_type == "pink":
             self.noise = PinkActionNoise(
-                sigma=noise_config["noise_sigma"],
-                seq_len=noise_config["noise_seq_len"],
+                sigma=noise_config["sigma"],
+                seq_len=noise_config["seq_len"],
                 action_dim=action_dim,
             )
 
