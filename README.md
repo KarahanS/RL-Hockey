@@ -2,15 +2,16 @@
 
 This repository contains a hockey-like game environment for RL
 
-## Install
+## Installation
 
-``python3 -m pip install git+https://github.com/martius-lab/hockey-env.git``
-
-or add the following line to your Pipfile
-
-``hockey = {editable = true, git = "https://git@github.com/martius-lab/hockey-env.git"}``
-
-
+```bash
+git clone https://github.com/KarahanS/RL-Hockey.git .               # clone the repository
+cd RL-Hockey                                                        # cd into the repository
+python -m venv env                                                  # create a virtual environment
+source env/bin/activate                                             # activate the venv
+pip install -r requirements.txt                                     # install the requirements
+pip install torch torchvision torchaudio                            # install a suitable torch version
+```
 ## HockeyEnv
 
 ![Screenshot](assets/hockeyenv1.png)
