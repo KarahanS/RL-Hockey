@@ -17,6 +17,13 @@ ERE_MIN_SIZE=2500
 SAVE_INTERVAL=500
 LOG_INTERVAL=20
 OUTPUT_DIR="./results"
+# Noise parameters
+NOISE_TYPE="normal"
+NOISE_SIGMA=0.1
+NOISE_THETA=0.15
+NOISE_DT=0.01
+NOISE_BETA=1.0
+NOISE_SEQ_LEN=1000
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -85,6 +92,31 @@ while [[ $# -gt 0 ]]; do
             OUTPUT_DIR="$2"
             shift 2
             ;;
+        # Noise parameters
+        --noise_type)
+            NOISE_TYPE="$2"
+            shift 2
+            ;;
+        --noise_sigma)
+            NOISE_SIGMA="$2"
+            shift 2
+            ;;
+        --noise_theta)
+            NOISE_THETA="$2"
+            shift 2
+            ;;
+        --noise_dt)
+            NOISE_DT="$2"
+            shift 2
+            ;;
+        --noise_beta)
+            NOISE_BETA="$2"
+            shift 2
+            ;;
+        --noise_seq_len)
+            NOISE_SEQ_LEN="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown parameter $1"
             exit 1
@@ -103,7 +135,13 @@ CMD="python trainer.py \
     --update_every $UPDATE_EVERY \
     --save_interval $SAVE_INTERVAL \
     --log_interval $LOG_INTERVAL \
-    --output_dir $OUTPUT_DIR"
+    --output_dir $OUTPUT_DIR \
+    --noise_type $NOISE_TYPE \
+    --noise_sigma $NOISE_SIGMA \
+    --noise_theta $NOISE_THETA \
+    --noise_dt $NOISE_DT \
+    --noise_beta $NOISE_BETA \
+    --noise_seq_len $NOISE_SEQ_LEN"
 
 # Add optional flags if enabled
 if [ "$USE_PER" = true ]; then
