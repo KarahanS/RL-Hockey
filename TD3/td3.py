@@ -3,10 +3,9 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
+
 from actor import Actor
 from critic import Critic
-
-
 
 class TD3(object):
     def __init__(
@@ -18,14 +17,33 @@ class TD3(object):
         tau=0.005,
         policy_noise=0.2,
         noise_clip=0.5,
-        policy_freq=2
+        policy_freq=2,
+        # LayerNorm parameters
+        use_layer_norm=False,
+        ln_eps=1e-5
     ):  
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.actor = Actor(state_dim, action_dim, max_action).to(self.device)
+
+        # Pass LayerNorm flags & parameters to Actor
+        self.actor = Actor(
+            state_dim,
+            action_dim,
+            max_action,
+            use_layer_norm=use_layer_norm,
+            ln_eps=ln_eps
+        ).to(self.device)
+
         self.actor_target = copy.deepcopy(self.actor)
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=3e-4)
 
-        self.critic = Critic(state_dim, action_dim).to(self.device)
+        # Pass LayerNorm flags & parameters to Critic
+        self.critic = Critic(
+            state_dim,
+            action_dim,
+            use_layer_norm=use_layer_norm,
+            ln_eps=ln_eps
+        ).to(self.device)
+
         self.critic_target = copy.deepcopy(self.critic)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=3e-4)
 
