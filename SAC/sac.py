@@ -45,6 +45,8 @@ class SACAgent:
     def __init__(
         self, observation_space, action_space, loss_fn=F.mse_loss, **userconfig
     ):
+        
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         if not isinstance(observation_space, spaces.box.Box):
             raise UnsupportedSpace(
                 "Observation space {} incompatible ".format(observation_space)
@@ -53,8 +55,7 @@ class SACAgent:
             raise UnsupportedSpace("Action space {} incompatible ".format(action_space))
 
         self._observation_space = observation_space
-        self._action_space = action_space
-        self._obs_dim = observation_space.shape[0]
+        self._action_space = action_space            
         self._action_dim = action_space.shape[0]
         self.critic_loss_fn = loss_fn
 
@@ -99,7 +100,7 @@ class SACAgent:
 
         # Initialize networks
         self.actor = Actor(
-            self._obs_dim,
+            self._observation_space,
             self._action_dim,
             self._config["hidden_sizes_actor"],
             self._config["learning_rate_actor"],
@@ -111,13 +112,13 @@ class SACAgent:
 
         # Two Q-functions to mitigate positive bias in policy improvement
         self.critic1 = Critic(
-            self._obs_dim,
+            self._observation_space,
             self._action_dim,
             self._config["hidden_sizes_critic"],
             self._config["learning_rate_critic"],
         )
         self.critic2 = Critic(
-            self._obs_dim,
+            self._observation_space,
             self._action_dim,
             self._config["hidden_sizes_critic"],
             self._config["learning_rate_critic"],
@@ -125,13 +126,13 @@ class SACAgent:
 
         # Target networks
         self.critic1_target = Critic(
-            self._obs_dim,
+            self._observation_space,
             self._action_dim,
             self._config["hidden_sizes_critic"],
             self._config["learning_rate_critic"],
         )
         self.critic2_target = Critic(
-            self._obs_dim,
+            self._observation_space,
             self._action_dim,
             self._config["hidden_sizes_critic"],
             self._config["learning_rate_critic"],

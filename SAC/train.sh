@@ -165,3 +165,5 @@ echo "Training started in background. PID: $PID"
 echo "Command executed: $CMD"
 echo "Logs will be saved in the experiment's results directory"
 echo "Check ${ERROR_LOG} for any errors"
+
+# ./train.sh --env_name "env"

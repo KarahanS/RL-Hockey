@@ -1,38 +1,91 @@
 from abc import ABC, abstractmethod
 import numpy as np
 from typing import Optional
+from typing import Optional, Tuple, Union
 from numpy.typing import DTypeLike
 from torch import nn
 import torch
 from feedforward import FeedForward
 from noise import *
 
+class CNNEncoder(nn.Module):
+    def __init__(self, observation_shape: Tuple):
+        super().__init__()
+        assert len(observation_shape) == 3, "Image input must have shape (H, W, C)"
+        in_channels = observation_shape[-1]  # Channels last format
+        
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channels, 32, kernel_size=8, stride=4),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=4, stride=2),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1),
+            nn.ReLU(),
+            nn.Flatten()
+        )
+        
+    def get_feature_size(self, observation_shape: Tuple) -> int:
+        # Handle channels-last format (H, W, C) -> (C, H, W)
+        C, H, W = observation_shape[-1], observation_shape[0], observation_shape[1]
+        test_input = torch.zeros(1, C, H, W)
+        with torch.no_grad():
+            output = self.conv(test_input)
+        return output.shape[1]
+        
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Handle channels-last format (B, H, W, C) -> (B, C, H, W)
+        if len(x.shape) == 3:  # Single image (H, W, C)
+            x = x.unsqueeze(0)  # Add batch dimension
+        x = x.permute(0, 3, 1, 2)  # (B, H, W, C) -> (B, C, H, W)
+        
+        # Normalize input
+        x = x / 255.0
+        return self.conv(x)
+    
 
 class Actor(FeedForward):
     def __init__(
         self,
-        observation_dim,
+        observation_space,
         action_dim,
         hidden_sizes=[256, 256],
         learning_rate=3e-4,
         action_space=None,
         device="cpu",
         epsilon=1e-6,
-        noise_config=None,
+        noise_config=None
     ):
+        
+        self.is_image_obs = len(observation_space.shape) == 3
+        
+        if self.is_image_obs:
+            input_size = 1  # temporary
+        else:
+            input_size = observation_space.shape[0]
+            
         super().__init__(
-            input_size=observation_dim,
+            input_size=input_size,
             hidden_sizes=hidden_sizes,
             output_size=action_dim * 2,  # Mean and log_std for each action
             hidden_activation=nn.ReLU(),
             output_activation=None,
         )
+        if self.is_image_obs:
+            self.cnn = CNNEncoder(observation_space.shape)
+            feature_dim = self.cnn.get_feature_size(observation_space.shape)
+            self.network[0] = nn.Linear(feature_dim, hidden_sizes[0])
 
         self.epsilon = epsilon
         self.action_bias = None
         self.action_dim = action_dim
         self.device = device
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
+        if self.is_image_obs:
+            self.optimizer = torch.optim.Adam(
+                list(self.cnn.parameters()) + list(self.network.parameters()),
+                lr=learning_rate
+            )
+        else:
+            self.optimizer = torch.optim.Adam(self.network.parameters(), lr=learning_rate)
 
         # Set up action scaling
         if action_space is None:
@@ -76,7 +129,11 @@ class Actor(FeedForward):
             )
 
     def forward(self, obs):
-        output = super().forward(obs)
+        if self.is_image_obs:
+            features = self.cnn(obs)
+        else:
+            features = obs
+        output = super().forward(features)
         mean, log_std = torch.chunk(output, 2, dim=-1)
         log_std = torch.clamp(log_std, -20, 10)
         return mean, log_std
@@ -109,19 +166,43 @@ class Actor(FeedForward):
 
 class Critic(FeedForward):
     def __init__(
-        self, observation_dim, action_dim, hidden_sizes=[256, 256], learning_rate=3e-4
+        self, observation_space, action_dim, hidden_sizes=[256, 256], learning_rate=3e-4
     ):
+        # Check if we're dealing with image observations
+        self.is_image_obs = len(observation_space.shape) == 3
+        
+        if self.is_image_obs:
+            input_size = 1 # temporary
+        else:
+            input_size = observation_space.shape[0]
+            
         super().__init__(
-            input_size=observation_dim + action_dim,
+            input_size=input_size  + action_dim,
             hidden_sizes=hidden_sizes,
             output_size=1,
             hidden_activation=nn.ReLU(),
             output_activation=None,
         )
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
+        if self.is_image_obs:
+            self.cnn = CNNEncoder(observation_space.shape)
+            feature_dim = self.cnn.get_feature_size(observation_space.shape)
+            self.network[0] = nn.Linear(feature_dim + action_dim, hidden_sizes[0])
+            
+        if self.is_image_obs:
+            self.optimizer = torch.optim.Adam(
+                list(self.cnn.parameters()) + list(self.network.parameters()),
+                lr=learning_rate
+            )
+        else:
+            self.optimizer = torch.optim.Adam(self.network.parameters(), lr=learning_rate)
 
     def forward(self, obs, action):
-        x = torch.cat([obs, action], dim=1)
+        if self.is_image_obs:
+            features = self.cnn(obs)
+        else:
+            features = obs
+            
+        x = torch.cat([features, action], dim=1)
         return super().forward(x)
 
 
