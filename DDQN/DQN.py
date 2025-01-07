@@ -61,8 +61,6 @@ class DQNAgent(object):
             "buffer_size": int(1e5),
             "batch_size": 128,
             "learning_rate": 0.0002,
-            "update_target_every": 20,
-            "use_target_net":True
         }
         self._config.update(userconfig)        
         self._eps = self._config['eps']
@@ -70,18 +68,11 @@ class DQNAgent(object):
         self.buffer = mem.Memory(max_size=self._config["buffer_size"])
                 
         # Q Network
-        self.Q = QFunction(observation_dim=self._observation_space.shape[0], 
-                           action_dim=self._action_n,
-                           learning_rate = self._config["learning_rate"])
-        # Q Network
-        self.Q_target = QFunction(observation_dim=self._observation_space.shape[0], 
-                                  action_dim=self._action_n,
-                                  learning_rate = 0)
-        self._update_target_net()
-        self.train_iter = 0
-            
-    def _update_target_net(self):        
-        self.Q_target.load_state_dict(self.Q.state_dict())
+        self.Q = QFunction(
+            observation_dim=self._observation_space.shape[0], 
+            action_dim=self._action_n,
+            learning_rate=self._config["learning_rate"]
+        )
 
     def act(self, observation, eps=None):
         if eps is None:
@@ -98,23 +89,19 @@ class DQNAgent(object):
             
     def train(self, iter_fit=32):
         losses = []
-        self.train_iter+=1
-        if self._config["use_target_net"] and self.train_iter % self._config["update_target_every"] == 0:
-            self._update_target_net()                
+
         for _ in range(iter_fit):
-            # sample from the replay buffer
-            data=self.buffer.sample(batch=self._config['batch_size'])
-            s = np.stack(data[:,0]) # s_t
-            a = np.stack(data[:,1]) # a_t
-            rew = np.stack(data[:,2])[:,None] # rew  (batchsize,1)
-            s_prime = np.stack(data[:,3]) # s_t+1
-            done = np.stack(data[:,4])[:,None] # done signal  (batchsize,1)
+            # Sample from the replay buffer
+            data = self.buffer.sample(batch=self._config['batch_size'])
+            s = np.stack(data[:,0])  # s_t
+            a = np.stack(data[:,1])  # a_t
+            rew = np.stack(data[:,2])[:,None]  # reward (batchsize,1)
+            s_prime = np.stack(data[:,3])  # s_t+1
+            done = np.stack(data[:,4])[:,None]  # done signal (batchsize,1)
             
-            if self._config["use_target_net"]:
-                v_prime = self.Q_target.maxQ(s_prime)
-            else:
-                v_prime = self.Q.maxQ(s_prime)
-            # target
+            v_prime = self.Q.maxQ(s_prime)
+
+            # Current state Q targets
             gamma=self._config['discount']                                                
             td_target = rew + gamma * (1.0-done) * v_prime
             
