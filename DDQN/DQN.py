@@ -2,8 +2,12 @@ from gymnasium import spaces
 import numpy as np
 import torch
 
-from feedforward import Feedforward
-import memory as mem
+try:
+    from .feedforward import Feedforward
+    from .memory import Memory
+except ImportError:
+    from feedforward import Feedforward
+    from memory import Memory
 
 
 class QFunction(Feedforward):
@@ -65,7 +69,7 @@ class DQNAgent(object):
         self._config.update(userconfig)        
         self._eps = self._config['eps']
         
-        self.buffer = mem.Memory(max_size=self._config["buffer_size"])
+        self.buffer = Memory(max_size=self._config["buffer_size"])
                 
         # Q Network
         self.Q = QFunction(

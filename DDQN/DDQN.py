@@ -1,6 +1,9 @@
 import numpy as np
 
-from DQN import DQNAgent, QFunction
+try:
+    from .DQN import DQNAgent, QFunction
+except ImportError:
+    from DQN import DQNAgent, QFunction
 
 
 class DDQNAgent(DQNAgent):
