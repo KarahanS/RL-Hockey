@@ -68,5 +68,5 @@ class DDQNAgent(DQNAgent):
 
     def load_state(self, load_dir):
         self.Q.load_state_dict(
-            torch.load(path.join(load_dir, "Q_model.ckpt"), weight_only=True)
+            torch.load(path.join(load_dir, "Q_model.ckpt"), weights_only=True)
         )
