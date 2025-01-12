@@ -1,4 +1,8 @@
+import os
+import os.path as path
+
 import numpy as np
+import torch
 
 try:
     from .DQN import DQNAgent, QFunction
@@ -52,3 +56,17 @@ class DDQNAgent(DQNAgent):
             losses.append(fit_loss)
 
         return losses
+
+    def save_state(self, save_dir):
+        if not path.exists(save_dir):
+            os.makedirs(save_dir)
+        
+        torch.save(
+            self.Q.state_dict(),
+            path.join(save_dir, "Q_model.ckpt")
+        )
+
+    def load_state(self, load_dir):
+        self.Q.load_state_dict(
+            torch.load(path.join(load_dir, "Q_model.ckpt"), weights_only=True)
+        )
