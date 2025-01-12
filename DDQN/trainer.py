@@ -1,3 +1,4 @@
+from enum import Enum
 from typing import Iterable
 
 import numpy as np
@@ -5,14 +6,42 @@ import numpy as np
 from .DDQN import DDQNAgent
 
 
+class CustomHockeyMode(Enum):
+    """Extension of the HockeyEnv Mode class"""
+
+    NORMAL = 0
+    SHOOTING = 1
+    DEFENSE = 2
+    RANDOM_SHOOTING_DEFENSE = 3
+    RANDOM_ALL = 4
+
+    def __str__(self):
+        return self.name
+
+
+class HockeyMode(Enum):
+    """The modes of the Hockey environment
+
+    Temporary(?) reimplementation until the HockeyEnv is available for import
+    """
+
+    NORMAL = 0
+    TRAIN_SHOOTING = 1
+    TRAIN_DEFENSE = 2
+
+    def __str__(self):
+        return self.name
+
+
 class Round:
     """
     A class to represent a sequence of opponents to train against
     """
 
-    def __init__(self, max_ep, agent_opp):
+    def __init__(self, max_ep: int, agent_opp: DDQNAgent, game_mode: CustomHockeyMode):
         self.max_ep = max_ep
         self.agent_opp = agent_opp
+        self.game_mode = game_mode
 
 
 class Stats:
@@ -43,13 +72,30 @@ def train_ddqn_agent(agent: DDQNAgent, env, max_steps: int, rounds: Iterable[Rou
     print_freq: how often to print the current episode statistics
     """
     
-    # TODO: env.reset supports changing modes, support different modes in this function. Randomly select mode?
-
     for j, r in enumerate(rounds):
         max_ep = r.max_ep
         agent_opp = r.agent_opp
+
+        custom_mode = r.game_mode
+        if custom_mode == CustomHockeyMode.NORMAL:
+            mode = HockeyMode.NORMAL
+        elif custom_mode == CustomHockeyMode.SHOOTING:
+            mode = HockeyMode.TRAIN_SHOOTING
+        elif custom_mode == CustomHockeyMode.DEFENSE:
+            mode = HockeyMode.TRAIN_DEFENSE
+        elif custom_mode == CustomHockeyMode.RANDOM_SHOOTING_DEFENSE:
+            mode = np.random.choice(
+                [HockeyMode.TRAIN_SHOOTING, HockeyMode.TRAIN_DEFENSE]
+            )
+        elif custom_mode == CustomHockeyMode.RANDOM_ALL:
+            mode = np.random.choice(
+                [HockeyMode.NORMAL, HockeyMode.TRAIN_SHOOTING, HockeyMode.TRAIN_DEFENSE]
+            )
+        else:
+            raise ValueError("Invalid mode")
+
         if verbose:
-            print(f"Begin round {j+1} for {max_ep} episodes")
+            print(f"Begin round {j+1} with mode {mode} for {max_ep} episodes")
 
         stats.losses_training_stages.append(len(stats.losses))
         stats.returns_training_stages.append(len(stats.returns))
@@ -59,7 +105,7 @@ def train_ddqn_agent(agent: DDQNAgent, env, max_steps: int, rounds: Iterable[Rou
 
         for i in tqdm(range(max_ep)):
             total_reward = 0
-            ob_a1, _info = env.reset()
+            ob_a1, _info = env.reset(mode=mode)
             ob_a2 = env.obs_agent_two()
 
             for t in range(max_steps):
