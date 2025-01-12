@@ -514,7 +514,7 @@ class HockeyEnv(gym.Env, EzPickle):
         self.winner = 0
         self.prev_shaping = None
         self.time = 0
-        if mode is not None and hasattr(Mode, self.mode):
+        if mode is not None and hasattr(Mode, str(self.mode)):
             self.mode = mode
 
         if self.mode == Mode.NORMAL:
