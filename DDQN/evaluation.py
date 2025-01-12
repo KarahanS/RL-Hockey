@@ -115,4 +115,6 @@ def display_stats(stats_np):
     print("Returns:")
     print("  Player:", np.sum(stats_np["rewards_player"]))
     print("  Opponent:", np.sum(stats_np["rewards_opp"]))
-    print("  Difference:", np.sum(stats_np["rewards_player"]) - np.sum(stats_np["rewards_opp"]))
+    print("  Difference:",
+        np.abs(np.sum(stats_np["rewards_player"]) - np.sum(stats_np["rewards_opp"]))
+    )
