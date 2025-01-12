@@ -20,7 +20,7 @@ class Stats:
     A class to represent the statistics of the training process
     """
 
-    def __init__(self, returns, returns_ts, losses, losses_ts):
+    def __init__(self, returns=[], returns_ts=[], losses=[], losses_ts=[]):
         self.returns = returns
         self.returns_training_stages = returns_ts
         self.losses = losses
@@ -34,12 +34,12 @@ def train_ddqn_agent(agent: DDQNAgent, env, max_steps: int, rounds: Iterable[Rou
 
     Parameters:
     agent: the agent to train
-    env: the environment to train in (should be a HockeyEnv object, cannot import it for type hint...)
+    env: the environment to train in (should be a HockeyEnv object, can't import it for type hint...)
     max_steps: the maximum number of steps to train for each episode
     rounds: describing the sequence of opponents to train against
     stats: object to store the statistics of the training process
     ddqn_iter_fit: the number of iterations to train the DDQN agent for
-    tqdm: tqdm object to display progress bars (optional)
+    tqdm: tqdm object (optional, for differentiating between notebook and console)
     print_freq: how often to print the current episode statistics
     """
     
