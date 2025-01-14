@@ -1,9 +1,17 @@
+import os
+import sys
 from enum import Enum
 from typing import Iterable
 
 import numpy as np
 
-from .DDQN import DDQNAgent
+root_dir = os.path.dirname(os.path.abspath("../"))
+if root_dir not in sys.path:
+    sys.path.append(root_dir)
+
+from DDQN.DDQN import DDQNAgent
+from hockey.hockey_env import Mode as HockeyMode
+from hockey.hockey_env import HockeyEnv
 
 
 class CustomHockeyMode(Enum):
@@ -14,20 +22,6 @@ class CustomHockeyMode(Enum):
     DEFENSE = 2
     RANDOM_SHOOTING_DEFENSE = 3
     RANDOM_ALL = 4
-
-    def __str__(self):
-        return self.name
-
-
-class HockeyMode(Enum):
-    """The modes of the Hockey environment
-
-    Temporary(?) reimplementation until the HockeyEnv is available for import
-    """
-
-    NORMAL = 0
-    TRAIN_SHOOTING = 1
-    TRAIN_DEFENSE = 2
 
     def __str__(self):
         return self.name
@@ -56,14 +50,14 @@ class Stats:
         self.losses_training_stages = losses_ts
 
 
-def train_ddqn_agent(agent: DDQNAgent, env, max_steps: int, rounds: Iterable[Round],
+def train_ddqn_agent(agent: DDQNAgent, env: HockeyEnv, max_steps: int, rounds: Iterable[Round],
                 stats: Stats, ddqn_iter_fit=32, print_freq=25, tqdm=None, verbose=False):
     """
     Train the agent in the hockey environment
 
     Parameters:
     agent: the agent to train
-    env: the environment to train in (should be a HockeyEnv object, can't import it for type hint...)
+    env: the environment to train in
     max_steps: the maximum number of steps to train for each episode
     rounds: describing the sequence of opponents to train against
     stats: object to store the statistics of the training process
@@ -137,4 +131,6 @@ def train_ddqn_agent(agent: DDQNAgent, env, max_steps: int, rounds: Iterable[Rou
             stats.returns.append([i, total_reward, t+1])
 
             if verbose and (i % print_freq == 0 or i == max_ep - 1):
-                print(f"Episode {i+1} | Return: {total_reward} | Loss: {loss[-1]} | Done in {t+1} steps")
+                print(
+                    f"Episode {i+1} | Return: {total_reward} | Loss: {loss[-1]} | Done in {t+1} steps"
+                )
