@@ -10,7 +10,7 @@ except ImportError:
     from DQN import DQNAgent, QFunction
 
 
-class DDQNAgent(DQNAgent):
+class DQNTargetAgent(DQNAgent):
     def __init__(self, observation_space, action_space, tau=1e-3, **userconfig):
         super().__init__(observation_space, action_space, **userconfig)
 
@@ -73,3 +73,14 @@ class DDQNAgent(DQNAgent):
         self.Q.load_state_dict(
             torch.load(path.join(load_dir, "Q_model.ckpt"), weights_only=True)
         )
+
+
+class DDQNAgent(DQNTargetAgent):
+    def __init__(self, observation_space, action_space, tau=1e-3, **userconfig):
+        super().__init__(observation_space, action_space, tau=tau, **userconfig)
+
+        # TODO
+
+    def train(self, iter_fit=32):
+        # TODO
+        return super().train(iter_fit=iter_fit)
