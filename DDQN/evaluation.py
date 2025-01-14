@@ -1,17 +1,25 @@
+import os
+import sys
+
 import numpy as np
 
-from .DDQN import DDQNAgent
+root_dir = os.path.dirname(os.path.abspath("./"))
+if root_dir not in sys.path:
+    sys.path.append(root_dir)
+
+from DDQN.DDQN import DDQNAgent
+from hockey.hockey_env import HockeyEnv
 
 
-def compare_agents(agent_player: DDQNAgent, agent_opp:DDQNAgent, env, num_matches=100, render=False,
-                  tqdm=None):
+def compare_agents(agent_player: DDQNAgent, agent_opp:DDQNAgent, env:HockeyEnv, num_matches=100,
+                    render=False, tqdm=None):
     """
     Play a number of matches between two agents, display and return statistics
 
     Parameters:
     agent_player: the agent to play as the player
     agent_opponent: the agent to play as the opponent
-    env: the environment to train in (should be a HockeyEnv object, can't import it for type hint...)
+    env: the environment to train in
     num_matches: the number of matches to play
     render: whether to render the environment
     tqdm: tqdm object (optional, for differentiating between notebook and console)
