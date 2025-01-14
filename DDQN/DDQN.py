@@ -14,9 +14,12 @@ class DDQNAgent(DQNAgent):
     def __init__(self, observation_space, action_space, tau=1e-3, **userconfig):
         super().__init__(observation_space, action_space, **userconfig)
 
-        self.Q_target = QFunction(observation_dim=self._observation_space.shape[0], 
-                                  action_dim=self._action_n,
-                                  learning_rate = 0)
+        self.Q_target = QFunction(
+            observation_dim=self._observation_space.shape[0],
+            hidden_sizes=self._config["hidden_sizes"],
+            action_dim=self._action_n,
+            learning_rate = 0
+        )
         self._config["update_target_every"] = 20
         self._config.update(userconfig)
 
