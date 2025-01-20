@@ -4,12 +4,13 @@ from enum import Enum
 from typing import Iterable
 
 import numpy as np
+import torch
 
 root_dir = os.path.dirname(os.path.abspath("../"))
 if root_dir not in sys.path:
     sys.path.append(root_dir)
 
-from DDQN.DDQN import DDQNAgent
+from DDQN.DQN import DQNAgent
 from hockey.hockey_env import Mode as HockeyMode
 from hockey.hockey_env import HockeyEnv
 
@@ -32,7 +33,7 @@ class Round:
     A class to represent a sequence of opponents to train against
     """
 
-    def __init__(self, max_ep: int, agent_opp: DDQNAgent, game_mode: CustomHockeyMode):
+    def __init__(self, max_ep: int, agent_opp: DQNAgent, game_mode: CustomHockeyMode):
         self.max_ep = max_ep
         self.agent_opp = agent_opp
         self.game_mode = game_mode
@@ -50,7 +51,7 @@ class Stats:
         self.losses_training_stages = losses_ts
 
 
-def train_ddqn_agent(agent: DDQNAgent, env: HockeyEnv, max_steps: int, rounds: Iterable[Round],
+def train_ddqn_agent_gpu(agent: DQNAgent, env: HockeyEnv, max_steps: int, rounds: Iterable[Round],
                 stats: Stats, ddqn_iter_fit=32, print_freq=25, tqdm=None, verbose=False):
     """
     Train the agent in the hockey environment
@@ -65,7 +66,11 @@ def train_ddqn_agent(agent: DDQNAgent, env: HockeyEnv, max_steps: int, rounds: I
     tqdm: tqdm object (optional, for differentiating between notebook and console)
     print_freq: how often to print the current episode statistics
     """
-    
+    train_device = agent.train_device
+
+    def np2gpu(data: np.ndarray) -> torch.Tensor:
+        return torch.from_numpy(data).float().to(train_device)
+
     for j, r in enumerate(rounds):
         max_ep = r.max_ep
         agent_opp = r.agent_opp
@@ -106,17 +111,17 @@ def train_ddqn_agent(agent: DDQNAgent, env: HockeyEnv, max_steps: int, rounds: I
                 done = False
                 trunc = False
 
-                a1_discr = agent.act(ob_a1)
-                a1 = env.discrete_to_continous_action(a1_discr)
-                a2 = agent_opp.act(ob_a2)
+                act_a1_discr = agent.act_gpu(np2gpu(ob_a1))  # int
+                act_a1 = env.discrete_to_continous_action(act_a1_discr)  # numpy array
+                act_a2 = agent_opp.act(ob_a2)  # numpy array
 
                 ob_a1_next, reward, done, trunc, _info = env.step(
-                    np.hstack([a1, a2])
+                    np.hstack([act_a1, act_a2])
                 )
                 total_reward += reward
 
                 agent.store_transition(
-                    (ob_a1, a1_discr, reward, ob_a1_next, done)
+                    (ob_a1, act_a1_discr, reward, ob_a1_next, done)
                 )
 
                 ob_a1 = ob_a1_next
@@ -125,12 +130,25 @@ def train_ddqn_agent(agent: DDQNAgent, env: HockeyEnv, max_steps: int, rounds: I
                 if done or trunc:
                     break
             
-            loss = agent.train(ddqn_iter_fit)
-
-            stats.losses.extend(loss)
+            fit_loss = agent.train_gpu(ddqn_iter_fit)
+            stats.losses.extend(fit_loss)
             stats.returns.append([i, total_reward, t+1])
 
             if verbose and (i % print_freq == 0 or i == max_ep - 1):
                 print(
-                    f"Episode {i+1} | Return: {total_reward} | Loss: {loss[-1]} | Done in {t+1} steps"
+                    f"Episode {i+1} | Return: {total_reward} | Loss: {fit_loss[-1]} | Done in {t+1} steps"
                 )
+    
+    # Finished training: copy finalized Q network to CPU
+    # TODO: May remove, see TODO in DQN.__init__
+    agent.Q.load_state_dict(agent.Q_gpu.state_dict())
+
+
+def train_ddqn_two_agents_gpu(agent_player: DQNAgent, agent_opp: DQNAgent, env: HockeyEnv, max_steps: int,
+                rounds: Iterable[Round], stats: Stats, ddqn_iter_fit=32, print_freq=25, tqdm=None, verbose=False):
+    """#TODO: docstring"""
+
+    # TODO: implementation
+    raise NotImplementedError
+
+    return ...

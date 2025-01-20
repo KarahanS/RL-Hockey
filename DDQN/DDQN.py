@@ -8,11 +8,11 @@ root_dir = os.path.dirname(os.path.abspath("./"))
 if root_dir not in sys.path:
     sys.path.append(root_dir)
 
-from DDQN.DQN import DQNTargetAgent
+from DDQN.DQN import TargetDQNAgent
 from DDQN.q_function import QFunction
 
 
-class DDQNAgent(DQNTargetAgent):
+class DuelingDQNAgent(TargetDQNAgent):
     def __init__(self, observation_space, action_space, tau=1e-3, **userconfig):
         super().__init__(observation_space, action_space, tau=tau, **userconfig)
 
