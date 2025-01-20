@@ -10,7 +10,7 @@ if root_dir not in sys.path:
     sys.path.append(root_dir)
 
 from DDQN.q_function import QFunction
-from DDQN.memory import Memory
+from DDQN.memory import Memory, MemoryGPU
 
 
 class DQNAgent(object):
@@ -18,14 +18,13 @@ class DQNAgent(object):
     Agent implementing Q-learning with NN function approximation.
     """
     def __init__(self, observation_space, action_space, **userconfig):
-        
         if not isinstance(observation_space, spaces.box.Box):
             raise ValueError('Observation space {} incompatible ' \
                                    'with {}. (Require: Box)'.format(observation_space, self))
         if not isinstance(action_space, spaces.discrete.Discrete):
             raise ValueError('Action space {} incompatible with {}.' \
                                    ' (Reqire Discrete.)'.format(action_space, self))
-        
+
         self._observation_space = observation_space
         self._action_space = action_space
         self._action_n = action_space.n
@@ -39,57 +38,130 @@ class DQNAgent(object):
         }
         self._config.update(userconfig)
         self._eps = self._config['eps']
+        self._batch_size = self._config['batch_size']
         
-        self.buffer = Memory(max_size=self._config["buffer_size"])
-
+        self._use_gpu = self._config.get("use_gpu", False)
+        
         # Q Network
         self.Q = QFunction(
             observation_dim=self._observation_space.shape[0],
             hidden_sizes=self._config["hidden_sizes"],
             action_dim=self._action_n,
-            learning_rate=self._config["learning_rate"],
+            learning_rate=self._config["learning_rate"]
         )
 
-    def act(self, observation, eps=None):
+        if self._use_gpu:
+            # TODO: Keeping both GPU and CPU versions for possible compatibility issues with the
+            #   given test environment. Training implemented only in the GPU.
+            #   Remove the CPU version and related alternate methods if not needed.
+            self.Q_gpu = QFunction(
+                observation_dim=self._observation_space.shape[0],
+                hidden_sizes=self._config["hidden_sizes"],
+                action_dim=self._action_n,
+                learning_rate=self._config["learning_rate"],
+                gpu=True
+            )
+
+            self.train_device = self.Q_gpu.device
+            self.buffer = MemoryGPU(max_size=self._config["buffer_size"], device=self.train_device)
+        else:
+            self.buffer = Memory(max_size=self._config["buffer_size"])
+
+    def act(self, observation: np.ndarray, eps=None):
         if eps is None:
             eps = self._eps
-        # epsilon greedy
+        
+        # Epsilon greedy
         if np.random.random() > eps:
+            # Greedy action
             action = self.Q.greedyAction(observation)
-        else: 
+        else:
+            # Random action
             action = self._action_space.sample()
+        
         return action
     
-    def store_transition(self, transition):
+    def act_gpu(self, observation: torch.Tensor, eps=None):
+        if eps is None:
+            eps = self._eps
+        
+        # Epsilon greedy
+        if np.random.random() > eps:
+            # Greedy action
+            action = self.Q_gpu.greedyAction_gpu(observation)
+        else:
+            # Random action
+            action = self._action_space.sample()
+        
+        return action
+    
+    def store_transition(self, transition: tuple):
         self.buffer.add_transition(transition)
-            
+
+    def _training_objective(self, sampled_data):
+        """Return sampled states, actions, and the value to minimize in the Q-learning update"""
+
+        s = np.stack(sampled_data[:, 0])  # s_t
+        a = np.stack(sampled_data[:, 1])  # a_t
+        rew = np.stack(sampled_data[:, 2])  # reward
+        s_prime = np.stack(sampled_data[:, 3])  # s_t+1
+        done = np.stack(sampled_data[:, 4])  # done signal
+        
+        # Convert to column vector to avoid broadcasting
+        rew = rew[:, None]
+        done = done[:, None]
+
+        v_prime = self.Q.maxQ(s_prime)
+
+        # Current state Q targets
+        gamma=self._config['discount']
+        td_target = rew + gamma * (1.0 - done) * v_prime
+
+        return s, a, td_target
+
+    def _training_objective_gpu(self, sampled_data):
+        """Return sampled states, actions, and the value to minimize in the Q-learning update"""
+
+        s, a, rew, s_prime, done = sampled_data
+
+        v_prime = self.Q_gpu.maxQ_gpu(s_prime)
+
+        # Current state Q targets
+        gamma = self._config['discount']
+        td_target = rew + gamma * (~done) * v_prime  # FIXME: Shape is [128, 128] instead of correct [128, 1] as in numpy version
+
+        return s, a, td_target
+
     def train(self, iter_fit=32):
         losses = []
 
         for _ in range(iter_fit):
             # Sample from the replay buffer
-            data = self.buffer.sample(batch=self._config['batch_size'])
-            s = np.stack(data[:, 0])  # s_t
-            a = np.stack(data[:, 1])  # a_t
-            rew = np.stack(data[:, 2])[:, None]  # reward (batchsize, 1)
-            s_prime = np.stack(data[:, 3])  # s_t+1
-            done = np.stack(data[:, 4])[:, None]  # done signal (batchsize, 1)
+            data = self.buffer.sample(batch=self._batch_size)
+            s, a, td_target = self._training_objective(data)
             
-            v_prime = self.Q.maxQ(s_prime)
+            # Optimize the lsq objective
+            fit_loss = self.Q.fit(s, a, td_target)
+            losses.append(fit_loss)
+        
+        return losses
 
-            # Current state Q targets
-            gamma=self._config['discount']
-            td_target = rew + gamma * (1.0 - done) * v_prime
+    def train_gpu(self, iter_fit=32):
+        losses = []
+
+        for _ in range(iter_fit):
+            # Sample from the replay buffer
+            data = self.buffer.sample(batch=self._batch_size)
+            s, a, td_target = self._training_objective_gpu(data)
             
             # optimize the lsq objective
-            fit_loss = self.Q.fit(s, a, td_target)
-            
+            fit_loss = self.Q_gpu.fit_gpu(s, a, td_target)
             losses.append(fit_loss)
         
         return losses
 
 
-class DQNTargetAgent(DQNAgent):
+class TargetDQNAgent(DQNAgent):
     def __init__(self, observation_space, action_space, tau=1e-3, **userconfig):
         super().__init__(observation_space, action_space, **userconfig)
 
@@ -97,44 +169,96 @@ class DQNTargetAgent(DQNAgent):
             observation_dim=self._observation_space.shape[0],
             hidden_sizes=self._config["hidden_sizes"],
             action_dim=self._action_n,
-            learning_rate = 0
+            learning_rate=self._config["learning_rate"],
+            gpu=self._use_gpu
         )
+
         self._config["update_target_every"] = 20
         self._config.update(userconfig)
 
-        self._tau = tau  # Polyak averaging parameter, 1 for hard update
-        self._update_target_net(tau=1.0)  # Hard update at the beginning
         self.train_iter = 0
-    
+
+        self._tau = tau  # Polyak averaging parameter, 1 for hard update
+        # Hard update at the beginning
+        if self._use_gpu:
+            self._update_target_net_gpu(tau=1.0)
+        else:
+            self._update_target_net(tau=1.0)
+        
+
     def _update_target_net(self, tau):
         for target_param, param in zip(self.Q_target.parameters(), self.Q.parameters()):
             target_param.data.copy_(tau * param.data + (1.0 - tau) * target_param.data)
         self.Q_target.load_state_dict(self.Q.state_dict())
     
+    def _update_target_net_gpu(self, tau):
+        for target_param, param in zip(self.Q_target.parameters(), self.Q_gpu.parameters()):
+            target_param.data.copy_(tau * param.data + (1.0 - tau) * target_param.data)
+        self.Q_target.load_state_dict(self.Q_gpu.state_dict())
+    
+    def _training_objective(self, sampled_data):
+        """Return sampled states, actions, and the value to minimize in the Q-learning update"""
+
+        s = np.stack(sampled_data[:, 0])  # s_t
+        a = np.stack(sampled_data[:, 1])  # a_t
+        rew = np.stack(sampled_data[:, 2])  # reward
+        s_prime = np.stack(sampled_data[:, 3])  # s_t+1
+        done = np.stack(sampled_data[:, 4])  # done signal
+
+        # Convert to column vector to avoid broadcasting
+        rew = rew[:, None]
+        done = done[:, None]
+
+        v_prime = self.Q_target.maxQ(s_prime)
+
+        # Current state Q targets
+        gamma = self._config['discount']
+        td_target = rew + gamma * (1.0 - done) * v_prime
+
+        return s, a, td_target
+
+    def _training_objective_gpu(self, sampled_data):
+        """Return sampled states, actions, and the value to minimize in the Q-learning update"""
+
+        s, a, rew, s_prime, done = sampled_data
+        v_prime = self.Q_target.maxQ_gpu(s_prime)
+
+        # Current state Q targets
+        gamma = self._config['discount']
+        td_target = rew + gamma * (~done) * v_prime
+
+        return s, a, td_target
+
     def train(self, iter_fit=32):
         losses = []
         self.train_iter += 1
         if self.train_iter % self._config["update_target_every"] == 0:
             self._update_target_net(self._tau)
-        for i in range(iter_fit):
+
+        for _ in range(iter_fit):
             # Sample from the replay buffer
-            data = self.buffer.sample(batch=self._config['batch_size'])
+            data = self.buffer.sample(batch=self._batch_size)
+            s, a, td_objective = self._training_objective(data)
+            
+            # Optimize the lsq objective
+            fit_loss = self.Q.fit(s, a, td_objective)
+            losses.append(fit_loss)
 
-            s = np.stack(data[:,0])  # s_t
-            a = np.stack(data[:,1])  # a_t
-            rew = np.stack(data[:,2])[:,None]  # reward (batchsize,1)
-            s_prime = np.stack(data[:,3])  # s_t+1
-            done = np.stack(data[:,4])[:,None]  # done signal (batchsize,1)
-            
-            v_prime = self.Q_target.maxQ(s_prime)
+        return losses
 
-            # Current state Q targets
-            gamma = self._config['discount']                                                
-            td_target = rew + gamma * (1.0-done) * v_prime
+    def train_gpu(self, iter_fit=32):
+        losses = []
+        self.train_iter += 1
+        if self.train_iter % self._config["update_target_every"] == 0:
+            self._update_target_net_gpu(self._tau)
+
+        for _ in range(iter_fit):
+            # Sample from the replay buffer
+            data = self.buffer.sample(batch=self._batch_size)
+            s, a, td_objective = self._training_objective_gpu(data)
             
-            # optimize the lsq objective
-            fit_loss = self.Q.fit(s, a, td_target)
-            
+            # Optimize the lsq objective
+            fit_loss = self.Q_gpu.fit_gpu(s, a, td_objective)
             losses.append(fit_loss)
 
         return losses
@@ -152,3 +276,48 @@ class DQNTargetAgent(DQNAgent):
         self.Q.load_state_dict(
             torch.load(os.path.join(load_dir, "Q_model.ckpt"), weights_only=True)
         )
+
+
+class DoubleDQNAgent(TargetDQNAgent):
+    def __init__(self, observation_space, action_space, tau=1e-3, **userconfig):
+        super().__init__(observation_space, action_space, tau=tau, **userconfig)
+
+    def _training_objective(self, sampled_data):
+        """Return sampled states, actions, and the value to minimize in the Q-learning update"""
+
+        s = np.stack(sampled_data[:, 0])  # s_t
+        a = np.stack(sampled_data[:, 1])  # a_t
+        rew = np.stack(sampled_data[:, 2])  # reward
+        s_prime = np.stack(sampled_data[:, 3])  # s_t+1
+        done = np.stack(sampled_data[:, 4])  # done signal
+
+        # Convert to column vector to avoid broadcasting
+        rew = rew[:, None]
+        done = done[:, None]
+
+        v_prime = self.Q_target.Q_value(
+            observations=torch.from_numpy(s_prime).float(),
+            actions=torch.from_numpy(self.Q.argmaxQ(s_prime)).long().flatten()
+        ).detach().numpy()
+
+        # Current state Q targets
+        gamma = self._config['discount']
+        td_target = rew + gamma * (1.0 - done) * v_prime
+
+        return s, a, td_target
+
+    def _training_objective_gpu(self, sampled_data):
+        """Return sampled states, actions, and the value to minimize in the Q-learning update"""
+
+        s, a, rew, s_prime, done = sampled_data
+
+        v_prime = self.Q_target.Q_value(
+            observations=s_prime,
+            actions=self.Q_gpu.argmaxQ_gpu(s_prime).long().flatten()
+        )
+
+        # Current state Q targets
+        gamma = self._config['discount']
+        td_target = rew + gamma * (~done) * v_prime
+
+        return s, a, td_target

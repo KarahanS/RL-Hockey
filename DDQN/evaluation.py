@@ -7,12 +7,12 @@ root_dir = os.path.dirname(os.path.abspath("./"))
 if root_dir not in sys.path:
     sys.path.append(root_dir)
 
-from DDQN.DDQN import DDQNAgent
-from hockey.hockey_env import HockeyEnv
+from DDQN.DQN import DQNAgent
+from hockey.hockey_env import HockeyEnv, BasicOpponent
 
 
-def compare_agents(agent_player: DDQNAgent, agent_opp:DDQNAgent, env:HockeyEnv, num_matches=100,
-                    render=False, tqdm=None):
+def compare_agents(agent_player: DQNAgent, agent_opp: DQNAgent | BasicOpponent, env: HockeyEnv,
+                   num_matches=100, render=False, tqdm=None):
     """
     Play a number of matches between two agents, display and return statistics
 
