@@ -6,6 +6,11 @@ __pycache__/
 # C extensions
 *.so
 
+evaluation_results_hockey
+graphs
+TD3/models_hockey
+TD3/results_hockey
+
 # Distribution / packaging
 .Python
 build/
