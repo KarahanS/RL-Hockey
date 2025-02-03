@@ -29,7 +29,7 @@ class Memory():
         return self.transitions[0:self.size]
 
 
-class MemoryGPU():
+class MemoryTorch():
     def __init__(self, max_size: int = 1e5, device: torch.device = torch.device('cpu')):
         self.size = 0
         self.current_idx = 0
