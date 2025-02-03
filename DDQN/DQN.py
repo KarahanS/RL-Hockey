@@ -1,3 +1,4 @@
+import copy
 import os
 import sys
 
@@ -10,7 +11,7 @@ if root_dir not in sys.path:
     sys.path.append(root_dir)
 
 from DDQN.q_function import QFunction
-from DDQN.memory import Memory, MemoryGPU
+from DDQN.memory import Memory, MemoryTorch
 
 
 class DQNAgent(object):
@@ -29,7 +30,7 @@ class DQNAgent(object):
         self._action_space = action_space
         self._action_n = action_space.n
         self._config = {
-            "eps": 0.05,            # Epsilon in epsilon greedy policies
+            "eps": 0.05,  # Epsilon in epsilon greedy policies
             "hidden_sizes": [128, 128],
             "discount": 0.95,
             "buffer_size": int(1e5),
@@ -40,32 +41,25 @@ class DQNAgent(object):
         self._eps = self._config['eps']
         self._batch_size = self._config['batch_size']
         
-        self._use_gpu = self._config.get("use_gpu", False)
+        self._use_torch = self._config.get("use_torch", False)
         
         # Q Network
         self.Q = QFunction(
             observation_dim=self._observation_space.shape[0],
             hidden_sizes=self._config["hidden_sizes"],
             action_dim=self._action_n,
-            learning_rate=self._config["learning_rate"]
+            learning_rate=self._config["learning_rate"],
+            use_torch=self._use_torch
         )
 
-        if self._use_gpu:
-            # TODO: Keeping both GPU and CPU versions for possible compatibility issues with the
-            #   given test environment. Training implemented only in the GPU.
-            #   Remove the CPU version and related alternate methods if not needed.
-            self.Q_gpu = QFunction(
-                observation_dim=self._observation_space.shape[0],
-                hidden_sizes=self._config["hidden_sizes"],
-                action_dim=self._action_n,
-                learning_rate=self._config["learning_rate"],
-                gpu=True
-            )
-
-            self.train_device = self.Q_gpu.device
-            self.buffer = MemoryGPU(max_size=self._config["buffer_size"], device=self.train_device)
+        self.train_device = self.Q.device
+        if self._use_torch:
+            self.buffer = MemoryTorch(max_size=self._config["buffer_size"], device=self.train_device)
         else:
             self.buffer = Memory(max_size=self._config["buffer_size"])
+
+    # TODO: If the server allows so, deprecate numpy-only alternatives and rename the torch
+    #   versions to the original names
 
     def act(self, observation: np.ndarray, eps=None):
         if eps is None:
@@ -81,14 +75,14 @@ class DQNAgent(object):
         
         return action
     
-    def act_gpu(self, observation: torch.Tensor, eps=None):
+    def act_torch(self, observation: torch.Tensor, eps=None):
         if eps is None:
             eps = self._eps
         
         # Epsilon greedy
         if np.random.random() > eps:
             # Greedy action
-            action = self.Q_gpu.greedyAction_gpu(observation)
+            action = self.Q.greedyAction_torch(observation)
         else:
             # Random action
             action = self._action_space.sample()
@@ -119,12 +113,12 @@ class DQNAgent(object):
 
         return s, a, td_target
 
-    def _training_objective_gpu(self, sampled_data):
+    def _training_objective_torch(self, sampled_data):
         """Return sampled states, actions, and the value to minimize in the Q-learning update"""
 
         s, a, rew, s_prime, done = sampled_data
 
-        v_prime = self.Q_gpu.maxQ_gpu(s_prime)
+        v_prime = self.Q.maxQ_torch(s_prime)
 
         # Current state Q targets
         gamma = self._config['discount']
@@ -146,42 +140,37 @@ class DQNAgent(object):
         
         return losses
 
-    def train_gpu(self, iter_fit=32):
+    def train_torch(self, iter_fit=32):
         losses = []
 
         for _ in range(iter_fit):
             # Sample from the replay buffer
             data = self.buffer.sample(batch=self._batch_size)
-            s, a, td_target = self._training_objective_gpu(data)
+            s, a, td_target = self._training_objective_torch(data)
             
             # optimize the lsq objective
-            fit_loss = self.Q_gpu.fit_gpu(s, a, td_target)
+            fit_loss = self.Q.fit_torch(s, a, td_target)
             losses.append(fit_loss)
         
         return losses
 
 
 class TargetDQNAgent(DQNAgent):
-    def __init__(self, observation_space, action_space, tau=1e-3, **userconfig):
+    def __init__(self, observation_space, action_space, **userconfig):
         super().__init__(observation_space, action_space, **userconfig)
 
-        self.Q_target = QFunction(
-            observation_dim=self._observation_space.shape[0],
-            hidden_sizes=self._config["hidden_sizes"],
-            action_dim=self._action_n,
-            learning_rate=self._config["learning_rate"],
-            gpu=self._use_gpu
-        )
-
+        self._config["tau"] = 1e-3
         self._config["update_target_every"] = 20
         self._config.update(userconfig)
 
+        self.Q_target = copy.deepcopy(self.Q)
+
         self.train_iter = 0
 
-        self._tau = tau  # Polyak averaging parameter, 1 for hard update
+        self._tau = self._config["tau"]  # Polyak averaging parameter, 1 for hard update
         # Hard update at the beginning
-        if self._use_gpu:
-            self._update_target_net_gpu(tau=1.0)
+        if self._use_torch:
+            self._update_target_net_torch(tau=1.0)
         else:
             self._update_target_net(tau=1.0)
         
@@ -191,10 +180,10 @@ class TargetDQNAgent(DQNAgent):
             target_param.data.copy_(tau * param.data + (1.0 - tau) * target_param.data)
         self.Q_target.load_state_dict(self.Q.state_dict())
     
-    def _update_target_net_gpu(self, tau):
-        for target_param, param in zip(self.Q_target.parameters(), self.Q_gpu.parameters()):
+    def _update_target_net_torch(self, tau):
+        for target_param, param in zip(self.Q_target.parameters(), self.Q.parameters()):
             target_param.data.copy_(tau * param.data + (1.0 - tau) * target_param.data)
-        self.Q_target.load_state_dict(self.Q_gpu.state_dict())
+        self.Q_target.load_state_dict(self.Q.state_dict())
     
     def _training_objective(self, sampled_data):
         """Return sampled states, actions, and the value to minimize in the Q-learning update"""
@@ -217,11 +206,11 @@ class TargetDQNAgent(DQNAgent):
 
         return s, a, td_target
 
-    def _training_objective_gpu(self, sampled_data):
+    def _training_objective_torch(self, sampled_data):
         """Return sampled states, actions, and the value to minimize in the Q-learning update"""
 
         s, a, rew, s_prime, done = sampled_data
-        v_prime = self.Q_target.maxQ_gpu(s_prime)
+        v_prime = self.Q_target.maxQ_torch(s_prime)
 
         # Current state Q targets
         gamma = self._config['discount']
@@ -246,19 +235,19 @@ class TargetDQNAgent(DQNAgent):
 
         return losses
 
-    def train_gpu(self, iter_fit=32):
+    def train_torch(self, iter_fit=32):
         losses = []
         self.train_iter += 1
         if self.train_iter % self._config["update_target_every"] == 0:
-            self._update_target_net_gpu(self._tau)
+            self._update_target_net_torch(self._tau)
 
         for _ in range(iter_fit):
             # Sample from the replay buffer
             data = self.buffer.sample(batch=self._batch_size)
-            s, a, td_objective = self._training_objective_gpu(data)
+            s, a, td_objective = self._training_objective_torch(data)
             
             # Optimize the lsq objective
-            fit_loss = self.Q_gpu.fit_gpu(s, a, td_objective)
+            fit_loss = self.Q.fit_torch(s, a, td_objective)
             losses.append(fit_loss)
 
         return losses
@@ -279,8 +268,8 @@ class TargetDQNAgent(DQNAgent):
 
 
 class DoubleDQNAgent(TargetDQNAgent):
-    def __init__(self, observation_space, action_space, tau=1e-3, **userconfig):
-        super().__init__(observation_space, action_space, tau=tau, **userconfig)
+    def __init__(self, observation_space, action_space, **userconfig):
+        super().__init__(observation_space, action_space, **userconfig)
 
     def _training_objective(self, sampled_data):
         """Return sampled states, actions, and the value to minimize in the Q-learning update"""
@@ -306,14 +295,14 @@ class DoubleDQNAgent(TargetDQNAgent):
 
         return s, a, td_target
 
-    def _training_objective_gpu(self, sampled_data):
+    def _training_objective_torch(self, sampled_data):
         """Return sampled states, actions, and the value to minimize in the Q-learning update"""
 
         s, a, rew, s_prime, done = sampled_data
 
         v_prime = self.Q_target.Q_value(
             observations=s_prime,
-            actions=self.Q_gpu.argmaxQ_gpu(s_prime).long().flatten()
+            actions=self.Q.argmaxQ_torch(s_prime).long().flatten()
         )
 
         # Current state Q targets

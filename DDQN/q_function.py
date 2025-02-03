@@ -3,8 +3,8 @@ import numpy as np
 
 
 class Feedforward(torch.nn.Module):
-    def __init__(self, input_size, hidden_sizes, output_size, gpu=False):
-        """gpu: Try to use GPU if available"""
+    def __init__(self, input_size, hidden_sizes, output_size, use_torch=True):
+        """use_torch: Use PyTorch functions, try to use GPU if available"""
 
         super(Feedforward, self).__init__()
 
@@ -13,7 +13,7 @@ class Feedforward(torch.nn.Module):
         self.output_size = output_size
         layer_sizes = [self.input_size] + self.hidden_sizes
 
-        if torch.cuda.is_available() and gpu:
+        if torch.cuda.is_available() and use_torch:
             self.device = torch.device("cuda")
         else:
             self.device = torch.device("cpu")
@@ -34,24 +34,28 @@ class Feedforward(torch.nn.Module):
 
     def predict(self, x: np.ndarray) -> np.ndarray:
         with torch.no_grad():
-            return self.forward(torch.from_numpy(x.astype(np.float32))).numpy()
+            return self.forward(
+                torch.from_numpy(x.astype(np.float32)).to(self.device)
+            ).cpu().numpy()
     
-    def predict_gpu(self, x: torch.Tensor) -> torch.Tensor:
+    def predict_torch(self, x: torch.Tensor) -> torch.Tensor:
         with torch.no_grad():
             return self.forward(x)
 
 
 class QFunction(Feedforward):
     def __init__(self, observation_dim, action_dim, hidden_sizes=[128, 128],
-                 learning_rate=2e-4, gpu=False):
+                 learning_rate=2e-4, use_torch=True):
         super().__init__(input_size=observation_dim, hidden_sizes=hidden_sizes,
-                         output_size=action_dim, gpu=gpu)
+                         output_size=action_dim, use_torch=use_torch)
         self.optimizer=torch.optim.Adam(
             self.parameters(),
             lr=learning_rate,
             eps=0.000001
         )
         self.loss = torch.nn.SmoothL1Loss()  # MSELoss()
+
+    # FIXME: CPU training functions will give device errors since Q can be on GPU
 
     def fit(self, observations, actions, targets):
         self.train() # put model in training mode
@@ -71,7 +75,7 @@ class QFunction(Feedforward):
 
         return loss.item()
 
-    def fit_gpu(self, observations, actions, targets):
+    def fit_torch(self, observations, actions, targets):
         self.train() # put model in training mode
         self.optimizer.zero_grad()
         # Forward pass
@@ -93,36 +97,106 @@ class QFunction(Feedforward):
         
         return np.max(self.predict(observations), axis=-1, keepdims=True)
     
-    def maxQ_gpu(self, observations: torch.Tensor) -> torch.Tensor:
+    def maxQ_torch(self, observations: torch.Tensor) -> torch.Tensor:
         """Return the highest Q value among all actions"""
 
-        return torch.max(self.predict_gpu(observations), dim=-1, keepdim=True).values
+        return torch.max(self.predict_torch(observations), dim=-1, keepdim=True).values
     
     def argmaxQ(self, observations: np.ndarray) -> np.ndarray:
         """Return the action that maximizes the Q value"""
 
         return np.argmax(self.predict(observations), axis=-1, keepdims=True)
     
-    def argmaxQ_gpu(self, observations: torch.Tensor) -> torch.Tensor:
+    def argmaxQ_torch(self, observations: torch.Tensor) -> torch.Tensor:
         """Return the action that maximizes the Q value"""
 
-        return torch.argmax(self.predict_gpu(observations), dim=-1, keepdim=True)
+        return torch.argmax(self.predict_torch(observations), dim=-1, keepdim=True)
 
     def greedyAction(self, observations: np.ndarray) -> np.int64:
         return np.argmax(self.predict(observations), axis=-1)
     
-    def greedyAction_gpu(self, observations: torch.Tensor) -> int:
-        return torch.argmax(self.predict_gpu(observations), dim=-1).item()
+    def greedyAction_torch(self, observations: torch.Tensor) -> int:
+        return torch.argmax(self.predict_torch(observations), dim=-1).item()
 
 
-class DuelingQFunction(Feedforward):
-    def __init__(self, observation_dim, action_dim, hidden_sizes=[128, 128],
-                 learning_rate=2e-4):
-        super().__init__(
-            input_size=observation_dim,
+class DuelingFeedforward(Feedforward):
+    def __init__(self, input_size, hidden_sizes, hidden_sizes_A, hidden_sizes_V, output_size,
+                 use_torch=True):
+        """use_torch: Use PyTorch functions, try to use GPU if available"""
+
+        Feedforward.__init__(
+            self,
+            input_size=input_size,
             hidden_sizes=hidden_sizes,
-            output_size=action_dim,
-            learning_rate=learning_rate
+            output_size=output_size,
+            use_torch=use_torch,
         )
 
-        # TODO
+        self.hidden_sizes_A = hidden_sizes_A
+        self.hidden_sizes_V = hidden_sizes_V
+
+        if torch.cuda.is_available() and use_torch:
+            self.device = torch.device("cuda")
+        else:
+            self.device = torch.device("cpu")
+
+        layer_sizes_A = [self.hidden_sizes[-1]] + hidden_sizes_A
+        layer_sizes_V = [self.hidden_sizes[-1]] + hidden_sizes_V
+
+        self.layers_A = torch.nn.ModuleList()
+        for i, o in zip(layer_sizes_A[:-1], layer_sizes_A[1:]):
+            self.layers_A.append(torch.nn.Linear(i, o, device=self.device, dtype=torch.float32))
+        self.activations_A = [torch.nn.ReLU() for _ in self.layers_A]
+        self.readout_A = torch.nn.Linear(
+            self.hidden_sizes_A[-1], self.output_size, device=self.device, dtype=torch.float32
+        )
+            
+        self.layers_V = torch.nn.ModuleList()
+        for i, o in zip(layer_sizes_V[:-1], layer_sizes_V[1:]):
+            self.layers_V.append(torch.nn.Linear(i, o, device=self.device, dtype=torch.float32))
+        self.activations_V = [torch.nn.ReLU() for _ in self.layers_V]
+        self.readout_V = torch.nn.Linear(
+            self.hidden_sizes_V[-1], 1, device=self.device, dtype=torch.float32
+        )
+        
+    def forward(self, x):
+        for layer, activation_fun in zip(self.layers, self.activations):
+            x = activation_fun(layer(x))
+        # Note: no readout layer here
+
+        x_A = x
+        for layer, activation_fun in zip(self.layers_A, self.activations_A):
+            x_A = activation_fun(layer(x_A))
+        x_A = self.readout_A(x_A)
+
+        x_V = x
+        for layer, activation_fun in zip(self.layers_V, self.activations_V):
+            x_V = activation_fun(layer(x_V))
+        x_V = self.readout_V(x_V)
+
+        return x_V + x_A - x_A.mean(dim=-1, keepdim=True)
+
+
+class DuelingQFunction(DuelingFeedforward, QFunction):
+    def __init__(self, observation_dim, action_dim, hidden_sizes=[128, 128], hidden_sizes_A=[128],
+                 hidden_sizes_V=[128], learning_rate=2e-4, use_torch=True):
+        DuelingFeedforward.__init__(
+            self,
+            input_size=observation_dim,
+            hidden_sizes=hidden_sizes,
+            hidden_sizes_A=hidden_sizes_A,
+            hidden_sizes_V=hidden_sizes_V,
+            output_size=action_dim,
+            use_torch=use_torch,
+        )
+
+        self.optimizer = torch.optim.Adam(
+            self.parameters(),
+            lr=learning_rate,
+            eps=0.000001
+        )
+
+        self.loss = torch.nn.SmoothL1Loss()  # MSELoss()
+    
+    # fit, Q_value, maxQ, argmaxQ, greedyAction, and their torch versions
+    #   are inherited from QFunction

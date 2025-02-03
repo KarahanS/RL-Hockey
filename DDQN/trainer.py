@@ -51,7 +51,7 @@ class Stats:
         self.losses_training_stages = losses_ts
 
 
-def train_ddqn_agent_gpu(agent: DQNAgent, env: HockeyEnv, max_steps: int, rounds: Iterable[Round],
+def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, max_steps: int, rounds: Iterable[Round],
                 stats: Stats, ddqn_iter_fit=32, print_freq=25, tqdm=None, verbose=False):
     """
     Train the agent in the hockey environment
@@ -111,7 +111,7 @@ def train_ddqn_agent_gpu(agent: DQNAgent, env: HockeyEnv, max_steps: int, rounds
                 done = False
                 trunc = False
 
-                act_a1_discr = agent.act_gpu(np2gpu(ob_a1))  # int
+                act_a1_discr = agent.act_torch(np2gpu(ob_a1))  # int
                 act_a1 = env.discrete_to_continous_action(act_a1_discr)  # numpy array
                 act_a2 = agent_opp.act(ob_a2)  # numpy array
 
@@ -130,7 +130,7 @@ def train_ddqn_agent_gpu(agent: DQNAgent, env: HockeyEnv, max_steps: int, rounds
                 if done or trunc:
                     break
             
-            fit_loss = agent.train_gpu(ddqn_iter_fit)
+            fit_loss = agent.train_torch(ddqn_iter_fit)
             stats.losses.extend(fit_loss)
             stats.returns.append([i, total_reward, t+1])
 
@@ -138,13 +138,9 @@ def train_ddqn_agent_gpu(agent: DQNAgent, env: HockeyEnv, max_steps: int, rounds
                 print(
                     f"Episode {i+1} | Return: {total_reward} | Loss: {fit_loss[-1]} | Done in {t+1} steps"
                 )
-    
-    # Finished training: copy finalized Q network to CPU
-    # TODO: May remove, see TODO in DQN.__init__
-    agent.Q.load_state_dict(agent.Q_gpu.state_dict())
 
 
-def train_ddqn_two_agents_gpu(agent_player: DQNAgent, agent_opp: DQNAgent, env: HockeyEnv, max_steps: int,
+def train_ddqn_two_agents_torch(agent_player: DQNAgent, agent_opp: DQNAgent, env: HockeyEnv, max_steps: int,
                 rounds: Iterable[Round], stats: Stats, ddqn_iter_fit=32, print_freq=25, tqdm=None, verbose=False):
     """#TODO: docstring"""
 
