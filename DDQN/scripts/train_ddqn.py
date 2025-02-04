@@ -28,8 +28,9 @@ def running_mean(x, N):
 
 
 def train(hparams, run_name, agent_type, model_dir="./models/",
+          long_round_ep=300_000,
           skip_plot=False, plot_dir="./plots/",
-          skip_eval=False, eval_times=1, eval_num_matches=1000):
+          skip_eval=False, eval_num_matches=1000):
     # Load the environment
     env = h_env.HockeyEnv()
 
@@ -72,10 +73,7 @@ def train(hparams, run_name, agent_type, model_dir="./models/",
 
     # Define the rounds
     rounds = [
-        Round(500, agent_opp_weak, CustomHockeyMode.NORMAL),
-        Round(500, agent_opp_strong, CustomHockeyMode.NORMAL),
-        Round(2000, agent_opp_weak, CustomHockeyMode.RANDOM_ALL),
-        Round(20_000, agent_opp_random, CustomHockeyMode.NORMAL)
+        Round(long_round_ep, agent_opp_random, CustomHockeyMode.NORMAL)
     ]
 
     # Train the agent
@@ -99,10 +97,10 @@ def train(hparams, run_name, agent_type, model_dir="./models/",
     agent_player.save_state(model_dir)
 
     # Plot the statistics & save
-    if not args.skip_plot:
+    if not skip_plot:
         plot_stats(stats, dir=plot_dir)
 
-    if not args.skip_eval:
+    if not skip_eval:
         # Evaluate the agent
         #agent_player.load_state(model_dir)
 
@@ -180,6 +178,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--ddqn-iter-fit", type=int, default=8, help="Number of iterations to train the DDQN agent"
                         " for each episode")
+    parser.add_argument("--long-round-ep", type=int, default=300_000, help="Number of episodes for the long round")
     parser.add_argument("--print-freq", type=int, default=25, help="Frequency of printing the training statistics")
     parser.add_argument("--verbose", action="store_true", help="Verbosity of the training process")
     parser.add_argument("--skip-plot", action="store_true", help="Skip plotting the training statistics")
@@ -211,5 +210,6 @@ if __name__ == "__main__":
 
     # TODO: Support hparam search with appropriate run names
     train(hparams, args.run_name, args.agent_type, model_dir=args.model_dir,
+          long_round_ep=args.long_round_ep,
           skip_plot=args.skip_plot, plot_dir=args.plot_dir,
-          skip_eval=args.skip_eval, eval_times=args.eval_times, eval_num_matches=args.eval_num_matches)
+          skip_eval=args.skip_eval, eval_num_matches=args.eval_num_matches)
