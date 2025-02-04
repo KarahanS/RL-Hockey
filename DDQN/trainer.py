@@ -31,6 +31,7 @@ class CustomHockeyMode(Enum):
 
 class RandomWeaknessBasicOpponent(BasicOpponent):
     def __init__(self, weakness_prob: float = 0.5):
+        super().__init__()
         self.weakness_prob = weakness_prob
     
     def change_weakness(self):
@@ -69,7 +70,7 @@ class Stats:
 
 def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, max_steps: int, rounds: Iterable[Round],
                 stats: Stats, ddqn_iter_fit=32, print_freq=25, tqdm=None, verbose=False,
-                wandb_hparams=None, run_name=None):
+                wandb_hparams=None):
     """
     Train the agent in the hockey environment
 
@@ -92,7 +93,7 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, max_steps: int, roun
     
     if wandb_hparams is not None:
         wandb_hparams["rounds"] = [str(r) for r in rounds]
-        total_eps = 0
+        run_name = wandb_hparams.pop("run_name")
 
         # Initialize wandb
         wandb.init(
@@ -103,6 +104,8 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, max_steps: int, roun
             # track hyperparameters and run metadata
             config=wandb_hparams
         )
+        
+        total_eps = 0
 
     for j, r in enumerate(rounds):
         max_ep = r.max_ep

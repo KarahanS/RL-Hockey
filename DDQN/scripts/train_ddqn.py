@@ -14,7 +14,7 @@ if root_dir not in sys.path:
     sys.path.append(root_dir)
 
 import DDQN.DDQN as ddqn
-from DDQN.DQN import TargetDQNAgent, DoubleDQNAgent
+from DDQN.DQN import DQNAgent, TargetDQNAgent, DoubleDQNAgent
 from DDQN.DDQN import DuelingDQNAgent, DoubleDuelingDQNAgent
 from DDQN.trainer import Stats, Round, CustomHockeyMode, RandomWeaknessBasicOpponent, \
     train_ddqn_agent_torch, train_ddqn_two_agents_torch
@@ -27,12 +27,26 @@ def running_mean(x, N):
     return (cumsum[N:] - cumsum[:-N]) / float(N)
 
 
-def train(hparams, run_name, model_dir="./models/", plot_dir="./plots/"):
+def train(hparams, run_name, agent_type, model_dir="./models/", plot_dir="./plots/"):
     # Load the environment
     env = h_env.HockeyEnv()
 
     # Define the agent
-    agent_player = DoubleDuelingDQNAgent(
+    match agent_type:
+        case "dqn":
+            agent_class = DQNAgent
+        case "targ-dqn":
+            agent_class = TargetDQNAgent
+        case "doub-dqn":
+            agent_class = DoubleDQNAgent
+        case "duel-dqn":
+            agent_class = DuelingDQNAgent
+        case "doub-duel-dqn":
+            agent_class = DoubleDuelingDQNAgent
+        case _:
+            raise ValueError(f"Invalid agent type: {agent_type}")
+    
+    agent_player = agent_class(
         env.observation_space,
         env.discrete_action_space,
         hidden_sizes=hparams["hidden_sizes"],
@@ -64,6 +78,10 @@ def train(hparams, run_name, model_dir="./models/", plot_dir="./plots/"):
     ]
 
     # Train the agent
+    wandb_hparams = hparams.copy()
+    wandb_hparams["agent_type"] = agent_type
+    wandb_hparams["run_name"] = run_name
+
     train_ddqn_agent_torch(
         agent_player,
         env,
@@ -73,8 +91,7 @@ def train(hparams, run_name, model_dir="./models/", plot_dir="./plots/"):
         ddqn_iter_fit=hparams["ddqn_iter_fit"],
         tqdm=None,
         verbose=hparams["verbose"],
-        wandb_hparams=hparams,
-        run_name=run_name
+        wandb_hparams=wandb_hparams,
     )
 
     # Save the agent model weights
@@ -121,6 +138,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a DDQN agent to play hockey")
 
     parser.add_argument("run_name", type=str, help="Name of the wandb run to log the training process")
+    parser.add_argument("agent_type", type=str, help="Type of the agent to train",
+                        choices=["dqn", "targ-dqn", "doub-dqn", "duel-dqn", "doub-duel-dqn"])
 
     parser.add_argument("--model-dir", type=str, default="./models/",
                         help="Directory to save the trained model weights")
@@ -168,5 +187,4 @@ if __name__ == "__main__":
     }
 
     # TODO: Support hparam search with appropriate run names
-    # TODO: Support argumentized agent types
-    train(hparams, args.run_name, model_dir=args.model_dir, plot_dir=args.plot_dir)
+    train(hparams, args.run_name, args.agent_type, model_dir=args.model_dir, plot_dir=args.plot_dir)

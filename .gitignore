@@ -115,3 +115,6 @@ results
 # others
 .idea/
 DDQN/TODO.md
+DDQN/scripts/models/
+DDQN/scripts/plots/
+
