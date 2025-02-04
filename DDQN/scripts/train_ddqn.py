@@ -77,14 +77,15 @@ def train(hparams, run_name, model_dir="./models/", plot_dir="./plots/"):
         ddqn_iter_fit=hparams["ddqn_iter_fit"],
         tqdm=None,
         verbose=hparams["verbose"],
-        wandb_hparams=hparams
+        wandb_hparams=hparams,
+        run_name=run_name
     )
 
     # Save the agent model weights
     agent_player.save_state(model_dir)
 
     # Plot the statistics & save
-    plot_stats(stats, path="./plots/")
+    plot_stats(stats, dir=plot_dir)
 
     # Finalize
     env.close()
@@ -123,7 +124,7 @@ def plot_stats(stats: Stats, dir="./plots/"):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a DDQN agent to play hockey")
 
-    parser.add_argument("run-name", type=str, help="Name of the wandb run to log the training process")
+    parser.add_argument("run_name", type=str, help="Name of the wandb run to log the training process")
 
     parser.add_argument("--model-dir", type=str, default="./models/",
                         help="Directory to save the trained model weights")
@@ -172,4 +173,4 @@ if __name__ == "__main__":
 
     # TODO: Support hparam search with appropriate run names
     # TODO: Support argumentized agent types
-    train(hparams, args.run_name, model_path=args.model_path, plot_path=args.plot_path)
+    train(hparams, args.run_name, model_dir=args.model_dir, plot_dir=args.plot_dir)
