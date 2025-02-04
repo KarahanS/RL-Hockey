@@ -5,6 +5,7 @@ from typing import Iterable
 
 import numpy as np
 import torch
+import wandb
 
 root_dir = os.path.dirname(os.path.abspath("../"))
 if root_dir not in sys.path:
@@ -12,7 +13,7 @@ if root_dir not in sys.path:
 
 from DDQN.DQN import DQNAgent
 from hockey.hockey_env import Mode as HockeyMode
-from hockey.hockey_env import HockeyEnv
+from hockey.hockey_env import HockeyEnv, BasicOpponent
 
 
 class CustomHockeyMode(Enum):
@@ -28,15 +29,30 @@ class CustomHockeyMode(Enum):
         return self.name
 
 
+class RandomWeaknessBasicOpponent(BasicOpponent):
+    def __init__(self, weakness_prob: float = 0.5):
+        self.weakness_prob = weakness_prob
+    
+    def change_weakness(self):
+        if np.random.rand() < self.weakness_prob:
+            self.weakness = True
+        else:
+            self.weakness = False
+
+
 class Round:
     """
     A class to represent a sequence of opponents to train against
     """
 
-    def __init__(self, max_ep: int, agent_opp: DQNAgent, game_mode: CustomHockeyMode):
+    def __init__(self, max_ep: int, agent_opp: DQNAgent | BasicOpponent, game_mode: CustomHockeyMode):
         self.max_ep = max_ep
         self.agent_opp = agent_opp
         self.game_mode = game_mode
+    
+    def __str__(self):
+        # TODO: agents probably don't print well. Implement pretty-print wrappers and __str__ methods?
+        return f"Round(max_ep={self.max_ep}, agent_opp={self.agent_opp}, game_mode={self.game_mode})"
 
 
 class Stats:
@@ -52,7 +68,8 @@ class Stats:
 
 
 def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, max_steps: int, rounds: Iterable[Round],
-                stats: Stats, ddqn_iter_fit=32, print_freq=25, tqdm=None, verbose=False):
+                stats: Stats, ddqn_iter_fit=32, print_freq=25, tqdm=None, verbose=False,
+                wandb_hparams=None, run_name=None):
     """
     Train the agent in the hockey environment
 
@@ -65,11 +82,26 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, max_steps: int, roun
     ddqn_iter_fit: the number of iterations to train the DDQN agent for
     tqdm: tqdm object (optional, for differentiating between notebook and console)
     print_freq: how often to print the current episode statistics
+    wandb_hparams: hyperparameters to log to wandb
+    run_name: the name of the wandb run
     """
     train_device = agent.train_device
 
     def np2gpu(data: np.ndarray) -> torch.Tensor:
         return torch.from_numpy(data).float().to(train_device)
+    
+    if wandb_hparams is not None:
+        wandb_hparams["rounds"] = [str(r) for r in rounds]
+
+        # Initialize wandb
+        wandb.init(
+            # set the wandb project where this run will be logged
+            project="RL-DDQN",
+            name=run_name,
+
+            # track hyperparameters and run metadata
+            config=wandb_hparams
+        )
 
     for j, r in enumerate(rounds):
         max_ep = r.max_ep
@@ -94,7 +126,7 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, max_steps: int, roun
             raise ValueError("Invalid mode")
 
         if verbose:
-            print(f"Begin round {j+1} with mode {mode} for {max_ep} episodes")
+            print(f"Begin round {j+1} with mode {custom_mode} for {max_ep} episodes")
 
         stats.losses_training_stages.append(len(stats.losses))
         stats.returns_training_stages.append(len(stats.returns))
@@ -106,6 +138,9 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, max_steps: int, roun
             total_reward = 0
             ob_a1, _info = env.reset(mode=mode)
             ob_a2 = env.obs_agent_two()
+
+            if type(r.agent_opp) == RandomWeaknessBasicOpponent:
+                r.agent_opp.change_weakness()
 
             for t in range(max_steps):
                 done = False
@@ -133,6 +168,16 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, max_steps: int, roun
             fit_loss = agent.train_torch(ddqn_iter_fit)
             stats.losses.extend(fit_loss)
             stats.returns.append([i, total_reward, t+1])
+
+            # TODO: Reward could be utilized differently in each step.
+            #   Logging here would have to be changed accordingly
+            if wandb_hparams is not None:
+                wandb.log({
+                    "episode": i,
+                    "return": total_reward,
+                    "loss": fit_loss[-1],
+                    "steps": t+1
+                })
 
             if verbose and (i % print_freq == 0 or i == max_ep - 1):
                 print(

@@ -125,7 +125,7 @@ if __name__ == "__main__":
 
     parser.add_argument("run-name", type=str, help="Name of the wandb run to log the training process")
 
-    parser.add_argument("--model-dir", type=str, default="./models/ddqn_agent.ckpt",
+    parser.add_argument("--model-dir", type=str, default="./models/",
                         help="Directory to save the trained model weights")
     parser.add_argument("--plot-dir", type=str, default="./plots/",
                         help="Directory to save the plots")
@@ -135,10 +135,10 @@ if __name__ == "__main__":
                         help="Hidden layer sizes for the advantage stream in Dueling DQN")
     parser.add_argument("--hidden-sizes-V", type=int, nargs="+", default=[512, 512],
                         help="Hidden layer sizes for the value stream in Dueling DQN")
-    parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate for the agent")
-    parser.add_argument("--discount", type=float, default=0.90, help="Discount factor for the agent")
-    parser.add_argument("--epsilon", type=float, default=0.2, help="Exploration rate for the agent")
-    parser.add_argument("--update-target-freq", type=int, default=20,
+    parser.add_argument("--lr", type=float, default=5e-5, help="Learning rate for the agent")
+    parser.add_argument("--discount", type=float, default=0.99, help="Discount factor for the agent")
+    parser.add_argument("--epsilon", type=float, default=0.1, help="Exploration rate for the agent")
+    parser.add_argument("--update-target-freq", type=int, default=1000,
                         help="Frequency of updating the target network")
     parser.add_argument("--tau", type=float, default=1e-4, help="Soft update parameter for the target network")
     parser.add_argument("--use-numpy", action="store_true", help="Use NumPy functionalities for training")
