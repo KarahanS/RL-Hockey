@@ -71,10 +71,9 @@ def train(hparams, run_name, agent_type, model_dir="./models/", plot_dir="./plot
     rounds = [
         Round(500, agent_opp_weak, CustomHockeyMode.NORMAL),
         Round(500, agent_opp_strong, CustomHockeyMode.NORMAL),
-        Round(2000, agent_opp_weak, CustomHockeyMode.RANDOM_SHOOTING_DEFENSE),
-        Round(2000, agent_opp_strong, CustomHockeyMode.RANDOM_SHOOTING_DEFENSE),
-        Round(10_000, RandomWeaknessBasicOpponent(weakness_prob=0.2),
-              CustomHockeyMode.RANDOM_ALL)
+        Round(2000, agent_opp_weak, CustomHockeyMode.RANDOM_ALL),
+        Round(20_000, RandomWeaknessBasicOpponent(weakness_prob=0.1),
+              CustomHockeyMode.NORMAL)
     ]
 
     # Train the agent
@@ -105,6 +104,9 @@ def train(hparams, run_name, agent_type, model_dir="./models/", plot_dir="./plot
 
 
 def plot_stats(stats: Stats, dir="./plots/"):
+    if not os.path.exists(dir):
+            os.makedirs(dir)
+
     returns_np = np.asarray(stats.returns)
     losses_np = np.asarray(stats.losses)
 
