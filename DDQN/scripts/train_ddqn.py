@@ -56,15 +56,11 @@ def train(hparams, run_name, model_dir="./models/", plot_dir="./plots/"):
     # Define the rounds
     rounds = [
         Round(500, agent_opp_weak, CustomHockeyMode.NORMAL),
-        Round(500, agent_opp_strong, CustomHockeyMode.NORMAL)
-    ] + \
-    [
+        Round(500, agent_opp_strong, CustomHockeyMode.NORMAL),
         Round(2000, agent_opp_weak, CustomHockeyMode.RANDOM_SHOOTING_DEFENSE),
-        Round(2000, agent_opp_strong, CustomHockeyMode.RANDOM_SHOOTING_DEFENSE)
-    ] + \
-    [
-        Round(10000, RandomWeaknessBasicOpponent(weakness_prob=0.5),
-              CustomHockeyMode.RANDOM_ALL),
+        Round(2000, agent_opp_strong, CustomHockeyMode.RANDOM_SHOOTING_DEFENSE),
+        Round(10_000, RandomWeaknessBasicOpponent(weakness_prob=0.2),
+              CustomHockeyMode.RANDOM_ALL)
     ]
 
     # Train the agent

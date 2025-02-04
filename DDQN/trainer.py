@@ -92,6 +92,7 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, max_steps: int, roun
     
     if wandb_hparams is not None:
         wandb_hparams["rounds"] = [str(r) for r in rounds]
+        total_eps = 0
 
         # Initialize wandb
         wandb.init(
@@ -173,11 +174,12 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, max_steps: int, roun
             #   Logging here would have to be changed accordingly
             if wandb_hparams is not None:
                 wandb.log({
-                    "episode": i,
+                    "episode": total_eps,
                     "return": total_reward,
                     "loss": fit_loss[-1],
                     "steps": t+1
                 })
+                total_eps += 1
 
             if verbose and (i % print_freq == 0 or i == max_ep - 1):
                 print(
