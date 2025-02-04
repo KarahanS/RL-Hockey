@@ -4,7 +4,6 @@ import sys
 from importlib import reload
 
 import numpy as np
-import wandb
 from matplotlib import pyplot as plt
 from tqdm.notebook import tqdm
 
@@ -18,6 +17,7 @@ from DDQN.DQN import DQNAgent, TargetDQNAgent, DoubleDQNAgent
 from DDQN.DDQN import DuelingDQNAgent, DoubleDuelingDQNAgent
 from DDQN.trainer import Stats, Round, CustomHockeyMode, RandomWeaknessBasicOpponent, \
     train_ddqn_agent_torch, train_ddqn_two_agents_torch
+from DDQN.evaluation import compare_agents, display_stats
     
 import hockey.hockey_env as h_env
 
@@ -27,7 +27,9 @@ def running_mean(x, N):
     return (cumsum[N:] - cumsum[:-N]) / float(N)
 
 
-def train(hparams, run_name, agent_type, model_dir="./models/", plot_dir="./plots/"):
+def train(hparams, run_name, agent_type, model_dir="./models/",
+          skip_plot=False, plot_dir="./plots/",
+          skip_eval=False, eval_times=1, eval_num_matches=1000):
     # Load the environment
     env = h_env.HockeyEnv()
 
@@ -63,6 +65,7 @@ def train(hparams, run_name, agent_type, model_dir="./models/", plot_dir="./plot
     # Define the opponent(s)
     agent_opp_weak = h_env.BasicOpponent(weak=True)
     agent_opp_strong = h_env.BasicOpponent(weak=False)
+    agent_opp_random = RandomWeaknessBasicOpponent(weakness_prob=0.1)
 
     # For visualization
     stats = Stats()
@@ -72,8 +75,7 @@ def train(hparams, run_name, agent_type, model_dir="./models/", plot_dir="./plot
         Round(500, agent_opp_weak, CustomHockeyMode.NORMAL),
         Round(500, agent_opp_strong, CustomHockeyMode.NORMAL),
         Round(2000, agent_opp_weak, CustomHockeyMode.RANDOM_ALL),
-        Round(20_000, RandomWeaknessBasicOpponent(weakness_prob=0.1),
-              CustomHockeyMode.NORMAL)
+        Round(20_000, agent_opp_random, CustomHockeyMode.NORMAL)
     ]
 
     # Train the agent
@@ -97,8 +99,23 @@ def train(hparams, run_name, agent_type, model_dir="./models/", plot_dir="./plot
     agent_player.save_state(model_dir)
 
     # Plot the statistics & save
-    plot_stats(stats, dir=plot_dir)
+    if not args.skip_plot:
+        plot_stats(stats, dir=plot_dir)
 
+    if not args.skip_eval:
+        # Evaluate the agent
+        #agent_player.load_state(model_dir)
+
+        opp_list = [agent_opp_weak, agent_opp_strong, agent_opp_random]
+        for name, opp in zip(["Weak", "Strong", "Random"], opp_list):
+            stats = compare_agents(
+                agent_player, opp, env, num_matches=eval_num_matches
+            )
+
+            print(f"{name} Opponent:")
+            display_stats(stats, verbose=hparams["verbose"])
+            print("\n" + "#"*50 + "\n")
+    
     # Finalize
     env.close()
 
@@ -165,6 +182,10 @@ if __name__ == "__main__":
                         " for each episode")
     parser.add_argument("--print-freq", type=int, default=25, help="Frequency of printing the training statistics")
     parser.add_argument("--verbose", action="store_true", help="Verbosity of the training process")
+    parser.add_argument("--skip-plot", action="store_true", help="Skip plotting the training statistics")
+    parser.add_argument("--skip-eval", action="store_true", help="Skip evaluation of the trained agent")
+    parser.add_argument("--eval-num-matches", type=int, default=1000,
+                        help="Number of matches to play for evaluation")
 
     args = parser.parse_args()
 
@@ -189,4 +210,6 @@ if __name__ == "__main__":
     }
 
     # TODO: Support hparam search with appropriate run names
-    train(hparams, args.run_name, args.agent_type, model_dir=args.model_dir, plot_dir=args.plot_dir)
+    train(hparams, args.run_name, args.agent_type, model_dir=args.model_dir,
+          skip_plot=args.skip_plot, plot_dir=args.plot_dir,
+          skip_eval=args.skip_eval, eval_times=args.eval_times, eval_num_matches=args.eval_num_matches)

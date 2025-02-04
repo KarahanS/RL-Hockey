@@ -12,7 +12,7 @@ from hockey.hockey_env import HockeyEnv, BasicOpponent
 
 
 def compare_agents(agent_player: DQNAgent, agent_opp: DQNAgent | BasicOpponent, env: HockeyEnv,
-                   num_matches=100, render=False, tqdm=None):
+                   num_matches=100, render=False, tqdm=None, seed=42):
     """
     Play a number of matches between two agents, display and return statistics
 
@@ -35,6 +35,12 @@ def compare_agents(agent_player: DQNAgent, agent_opp: DQNAgent | BasicOpponent, 
         "obs_player": [],
         "obs_opp": []
     }
+
+    np.random.seed(seed)
+    try:
+        env.set_seed(seed)
+    except AttributeError:
+        env.seed(seed)
 
     if tqdm is None:
         tqdm = lambda x: x
@@ -72,7 +78,7 @@ def compare_agents(agent_player: DQNAgent, agent_opp: DQNAgent | BasicOpponent, 
     return stats_np
 
 
-def display_stats(stats_np):
+def display_stats(stats_np, verbose=False):
     """
     Display statistics from compare_agents
 
@@ -100,16 +106,17 @@ def display_stats(stats_np):
         print("  left player puck keep time:", np.mean(observation[16]))
         print("  right player puck keep time:", np.mean(observation[17]))
 
-    print("Player Observation Mean:")
-    print_observation_stats(np.mean(stats_np["obs_player"], axis=0))
-    print()
+    if verbose:
+        print("Player Observation Mean:")
+        print_observation_stats(np.mean(stats_np["obs_player"], axis=0))
+        print()
 
-    print("Relative Std. Change in Agent Observations:")
-    print_observation_stats(
-        (np.std(stats_np["obs_player"], axis=0) - np.std(stats_np["obs_opp"], axis=0)) \
-            / np.std(stats_np["obs_player"], axis=0)
-    )
-    print()
+        print("Relative Std. Change in Agent Observations:")
+        print_observation_stats(
+            (np.std(stats_np["obs_player"], axis=0) - np.std(stats_np["obs_opp"], axis=0)) \
+                / np.std(stats_np["obs_player"], axis=0)
+        )
+        print()
     
     print("Player Win Rate:")
     print(np.mean(stats_np["winners"] == 1))
