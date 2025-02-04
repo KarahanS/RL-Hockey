@@ -1,3 +1,25 @@
+#!/usr/bin/env python
+"""
+General Training Script for the Hockey Environment with Configurable Noise, RND, and Layer Norm
+
+This script trains an agent in a custom hockey environment using a specified
+agent class. It supports multiple modes (e.g., self_play, vs_strong, vs_weak,
+shooting, defense, mixed) and allows overriding training parameters (including
+noise type, RND, and layer normalization options) via command-line arguments
+or a JSON configuration file.
+
+Usage Example:
+    python train_hockey.py --mode self_play --episodes 70000 --seed 47 \
+        --save_model --agent_class src.td3:TD3 \
+        --expl_noise_type pink --expl_noise 0.1 \
+        --pink_noise_exponent 1.0 --pink_noise_fmin 0.0 \
+        --use_rnd --rnd_weight 1.0 --rnd_lr 1e-4 --rnd_hidden_dim 128 \
+        --use_layer_norm \
+        --load_agent_path models_hockey/mixed/seed_44/TD3_Hockey_mixed_seed_44_final.pth \
+        --opponent_agent_paths models_hockey/mixed/seed_44/TD3_Hockey_mixed_seed_44_final.pth
+"""
+
+import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 import copy
@@ -10,19 +32,40 @@ import random
 from tqdm import tqdm
 import gymnasium as gym
 import sys
+import importlib  # For dynamic agent class loading
 
-# Import your TD3 components
+# Import your ReplayBuffer and a default TD3 agent (if not using another agent)
 from src.memory import ReplayBuffer
-from src.td3 import TD3
+from src.td3 import TD3  # Default agent if no other is provided
 
 # Import the custom Hockey environment
-# Add the parent directory (one level up) to sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import hockey.hockey_env as h_env
 from importlib import reload
 
 # Reload the hockey environment to ensure the latest version is used
 reload(h_env)
+
+# ============================================
+# Utility: Dynamic Agent Class Loader
+# ============================================
+def get_agent_class(class_path):
+    """
+    Dynamically imports and returns the agent class given its module path and class name.
+    The expected format is "module_path:ClassName".
+    
+    Args:
+        class_path (str): String in the format "module_path:ClassName".
+        
+    Returns:
+        The agent class.
+    """
+    try:
+        module_name, class_name = class_path.split(":")
+    except ValueError:
+        raise ValueError("Agent class must be specified in the format 'module_path:ClassName'")
+    module = importlib.import_module(module_name)
+    return getattr(module, class_name)
 
 # ============================================
 # Environment Wrapper
@@ -66,14 +109,13 @@ class CustomHockeyEnv:
     def get_info_agent_two(self):
         return self.env.get_info_agent_two()
 
-
 # ============================================
 # Trained Opponent Class
 # ============================================
 class TrainedOpponent:
     def __init__(self, agent, training=False):
         """
-        Opponent that uses a trained TD3 agent to select actions.
+        Opponent that uses a trained agent to select actions.
         If training is True, this agent will also be trained.
         """
         self.agent = agent
@@ -101,7 +143,6 @@ class TrainedOpponent:
             return self.agent.train(replay_buffer, batch_size)
         return None, None
 
-
 # ============================================
 # Opponent Definitions
 # ============================================
@@ -112,7 +153,7 @@ def get_opponent(opponent_type, env, trained_agent=None):
     Args:
         opponent_type (str): Type of opponent ('weak', 'strong', 'trained').
         env (CustomHockeyEnv): The environment instance.
-        trained_agent (TD3 or None): The trained agent to use as an opponent if opponent_type is 'trained'.
+        trained_agent (Agent or None): The trained agent to use as an opponent if opponent_type is 'trained'.
 
     Returns:
         An opponent instance compatible with the environment.
@@ -128,7 +169,6 @@ def get_opponent(opponent_type, env, trained_agent=None):
     else:
         raise ValueError(f"Unknown opponent type: {opponent_type}")
 
-
 # ============================================
 # Extended Evaluation Function
 # ============================================
@@ -138,39 +178,32 @@ def eval_policy_extended(
     seed=42,
     mode=h_env.Mode.NORMAL,
     opponent_type=None,
-    trained_agent=None  # Existing parameter
+    trained_agent=None
 ):
     """
-    A single evaluation function that can handle:
-      - Normal mode with strong/weak/trained opponent
-      - Shooting mode (no opponent)
-      - Defense mode (no opponent)
-
-    If `opponent_type` is 'strong', 'weak', or 'trained', we create that opponent.
-    If `opponent_type` is None, we do not create any built-in opponent.
-
-    Returns a dictionary of evaluation stats:
-        {
-            "avg_reward": float,
-            "win": int,
-            "loss": int,
-            "draw": int,
-            "win_rate": float
-        }
+    Evaluates the policy over a number of episodes in different scenarios.
+    
+    Args:
+        policy: The agent's policy to evaluate.
+        eval_episodes (int): Number of evaluation episodes.
+        seed (int): Seed for reproducibility.
+        mode: Environment mode (e.g., NORMAL, TRAIN_SHOOTING, TRAIN_DEFENSE).
+        opponent_type (str or None): Opponent type ('strong', 'weak', 'trained') or None.
+        trained_agent: Agent instance used when opponent_type is 'trained'.
+    
+    Returns:
+        A dictionary with evaluation statistics including average reward and win rate.
     """
-    # Create a new environment for evaluation to avoid state carry-over
     eval_env = CustomHockeyEnv(mode=mode)
     eval_env.seed(seed)
 
-    # Set networks to eval mode
     policy.actor.eval()
     policy.critic.eval()
 
-    # Initialize the opponent if needed
     if opponent_type in ["strong", "weak", "trained"]:
         opponent = get_opponent(opponent_type, eval_env, trained_agent=trained_agent)
     else:
-        opponent = None  # e.g., for shooting or defense
+        opponent = None
 
     total_rewards = []
     results = {'win': 0, 'loss': 0, 'draw': 0}
@@ -182,29 +215,22 @@ def eval_policy_extended(
             episode_reward = 0
 
             while not done:
-                # Agent action
                 agent_action = policy.act(np.array(state), add_noise=False)
-
                 if opponent is not None:
-                    # Opponent action
                     opponent_obs = eval_env.env.obs_agent_two()
                     opponent_action = opponent.act(opponent_obs)
                 else:
-                    # No built-in opponent, so second agent does nothing
                     opponent_action = np.array([0, 0, 0, 0], dtype=np.float32)
 
-                # Combine actions
                 full_action = np.hstack([agent_action, opponent_action])
-
                 next_state, reward, done, info = eval_env.step(full_action)
                 episode_reward += reward
                 state = next_state
 
             total_rewards.append(episode_reward)
 
-            # Determine final outcome via `env._get_info()`
             final_info = eval_env.env._get_info()
-            winner = final_info.get('winner', 0)  # 1 => agent1, -1 => agent1 loses, 0 => draw
+            winner = final_info.get('winner', 0)  # 1: win, -1: loss, 0: draw
 
             if winner == 1:
                 results['win'] += 1
@@ -217,7 +243,6 @@ def eval_policy_extended(
     total_games = results['win'] + results['loss'] + results['draw']
     win_rate = (results['win'] / total_games) if total_games > 0 else 0.0
 
-    # Restore networks to train mode
     policy.actor.train()
     policy.critic.train()
 
@@ -231,16 +256,16 @@ def eval_policy_extended(
 
     return eval_stats
 
-
 # ============================================
 # Plotting Functions
 # ============================================
 def plot_losses(loss_data_main, loss_data_opponent, mode, save_path):
+    """
+    Plots critic and actor losses over episodes.
+    """
     episodes = range(1, len(loss_data_main["critic_loss"]) + 1)
-
     plt.figure(figsize=(14, 6))
 
-    # Plot Critic Loss
     plt.subplot(1, 2, 1)
     plt.plot(episodes, loss_data_main["critic_loss"], label='Main Critic Loss', color='blue')
     if loss_data_opponent is not None:
@@ -251,7 +276,6 @@ def plot_losses(loss_data_main, loss_data_opponent, mode, save_path):
     plt.legend()
     plt.grid(True)
 
-    # Plot Actor Loss
     plt.subplot(1, 2, 2)
     plt.plot(episodes, loss_data_main["actor_loss"], label='Main Actor Loss', color='orange')
     if loss_data_opponent is not None:
@@ -266,8 +290,10 @@ def plot_losses(loss_data_main, loss_data_opponent, mode, save_path):
     plt.savefig(os.path.join(save_path, f"losses_{mode}.png"))
     plt.close()
 
-
 def plot_rewards(rewards_main, rewards_opponent, mode, save_path, window=20):
+    """
+    Plots episode rewards and their moving average.
+    """
     plt.figure(figsize=(12,6))
     plt.plot(rewards_main, label='Main Episode Reward', alpha=0.3)
     if rewards_opponent is not None:
@@ -286,27 +312,14 @@ def plot_rewards(rewards_main, rewards_opponent, mode, save_path, window=20):
     plt.savefig(os.path.join(save_path, f"rewards_{mode}.png"))
     plt.close()
 
-
 def plot_multi_winrate_curves(winrate_dict, mode, save_path):
     """
-    Plots multiple win-rate curves in the same figure.
-    `winrate_dict` should be a dictionary like:
-       {
-         "strong": [...],
-         "weak": [...],
-         "trained_1": [...],
-         "trained_2": [...],
-         "shooting": [...],
-         "defense": [...]
-       }
-    Each list is the time series of the agent's win rate in that scenario.
+    Plots multiple win-rate curves for different scenarios.
     """
     plt.figure(figsize=(12,6))
-
     for scenario, wr_list in winrate_dict.items():
         if len(wr_list) > 0:
             plt.plot(wr_list, label=f'Win Rate vs {scenario.capitalize()}')
-
     plt.xlabel('Evaluation Index (every eval_freq episodes)')
     plt.ylabel('Win Rate')
     plt.title(f'{mode} - Win Rates Over Training (All Scenarios)')
@@ -316,10 +329,9 @@ def plot_multi_winrate_curves(winrate_dict, mode, save_path):
     plt.savefig(os.path.join(save_path, f"winrates_{mode}.png"))
     plt.close()
 
-
 def plot_noise_comparison(agent, training_config, env_name, save_path):
     """
-    Plots Pink/OU noise vs Gaussian noise for comparison, if the agent uses pink or OU noise.
+    Plots a comparison between Pink/OU noise and Gaussian noise.
     """
     if training_config["expl_noise_type"].lower() not in ["pink", "ou"]:
         print(f"No noise comparison plot available for noise type: {training_config['expl_noise_type']}")
@@ -351,27 +363,32 @@ def plot_noise_comparison(agent, training_config, env_name, save_path):
         plt.savefig(os.path.join(save_path, f"noise_comparison_dim_{dim}_{env_name}.png"))
         plt.close()
 
-
 # ============================================
 # Logging Setup
 # ============================================
 def setup_logging(results_dir, seed, mode):
+    """
+    Configures logging to file and optionally to console.
+    """
     log_file = os.path.join(results_dir, f"training_log_seed_{seed}.log")
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s | %(levelname)s | %(message)s',
         handlers=[
             logging.FileHandler(log_file),
-            #logging.StreamHandler()  # Uncomment to also output logs to console
+            # Uncomment the next line to also log to console:
+            # logging.StreamHandler()
         ]
     )
     logging.info(f"Training started with mode: {mode}, seed: {seed}")
-
 
 # ============================================
 # Save Training Information
 # ============================================
 def save_training_info(config, mode, mixed_cycle, opponent_agent_paths, results_dir):
+    """
+    Saves training configuration and settings to a JSON file.
+    """
     if mixed_cycle is not None:
         mixed_cycle_serializable = []
         for opponent, mode_enum in mixed_cycle:
@@ -389,56 +406,48 @@ def save_training_info(config, mode, mixed_cycle, opponent_agent_paths, results_
     with open(os.path.join(results_dir, "training_info.json"), "w") as f:
         json.dump(training_info, f, indent=4)
 
-
 # ============================================
-# Utility for Mixed Mode (if needed)
+# Utility for Mixed Mode
 # ============================================
 def get_trained_opponent_index(episode, num_trained_opponents):
+    """
+    Returns the index of the trained opponent based on the current episode.
+    """
     if num_trained_opponents == 0:
         return None
     return (episode - 1) % num_trained_opponents
 
-
 # ============================================
-# Training Loop
+# Main Training Loop
 # ============================================
 def main(
+    agent_class,  # Agent class to be used for training
     mode="vs_strong",
     episodes=700,
     seed=42,
     save_model=True,
     training_config=None,
     load_agent_path=None,
-    opponent_agent_paths=None  # list of paths for pre-existing opponent checkpoints (used in mixed mode)
+    opponent_agent_paths=None
 ):
-    # Default training configuration if none provided
-    if training_config is None:
-        training_config = {
-            "discount": 0.99,
-            "tau": 0.005,
-            "policy_noise": 0.2,
-            "noise_clip": 0.5,
-            "policy_freq": 2,
-            "max_episodes": episodes,
-            "start_timesteps": 1000,
-            "eval_freq": 100,
-            "batch_size": 256,
-            "expl_noise_type": "pink",
-            "expl_noise": 0.1,
-            "pink_noise_params": {"exponent": 1.0, "fmin": 0.0},
-            "ou_noise_params": {"mu": 0.0, "theta": 0.15, "sigma": 0.2},
-            "use_layer_norm": True,
-            "ln_eps": 1e-5,
-            "save_model": save_model,
-            "save_model_freq": 10000,
-            "use_rnd": True,
-            "rnd_weight": 1.0,
-            "rnd_lr": 1e-4,
-            "rnd_hidden_dim": 128,
-            "max_episode_steps": 600
-        }
+    """
+    Main function for training the agent in various modes.
+    
+    Args:
+        agent_class: The class of the agent to be used (must implement required methods).
+        mode (str): Training mode ('vs_strong', 'vs_weak', 'shooting', 'defense', 'mixed', 'self_play').
+        episodes (int): Number of training episodes.
+        seed (int): Random seed.
+        save_model (bool): Whether to save the model checkpoints.
+        training_config (dict): Dictionary of training configuration parameters.
+        load_agent_path (str or None): Path to a pre-trained agent checkpoint.
+        opponent_agent_paths (list): List of paths for pre-existing opponent checkpoints (for mixed mode).
+    
+    Returns:
+        final_evaluation_results (dict): Dictionary containing final evaluation statistics and training logs.
+    """
 
-    # Decide environment mode based on user choice
+    # Determine environment mode based on provided mode argument
     if mode == "shooting":
         env_mode = h_env.Mode.TRAIN_SHOOTING
     elif mode == "defense":
@@ -460,7 +469,7 @@ def main(
     os.makedirs(base_results_dir, exist_ok=True)
     os.makedirs(base_models_dir, exist_ok=True)
 
-    file_name = f"TD3_Hockey_{mode}_seed_{seed}"
+    file_name = f"{agent_class.__name__}_Hockey_{mode}_seed_{seed}"
     results_dir = os.path.join(base_results_dir, mode, f"seed_{seed}")
     models_dir = os.path.join(base_models_dir, mode, f"seed_{seed}")
     os.makedirs(results_dir, exist_ok=True)
@@ -476,9 +485,7 @@ def main(
         mixed_cycle = [
             ("strong", h_env.Mode.NORMAL),
             ("strong", h_env.Mode.NORMAL),
-            ("strong", h_env.Mode.NORMAL),
             ("weak", h_env.Mode.NORMAL),
-            ("trained", h_env.Mode.NORMAL),
             (None, h_env.Mode.TRAIN_SHOOTING),
             (None, h_env.Mode.TRAIN_DEFENSE)
         ]
@@ -487,31 +494,17 @@ def main(
 
     save_training_info(training_config, mode, mixed_cycle, opponent_agent_paths, results_dir)
 
-    # ============================================
-    # Initialize Agents and Replay Buffers
-    # ============================================
+    # Initialize agent and replay buffers
     if mode == "self_play":
         current_env_mode = h_env.Mode.NORMAL
-        # Initialize only the main agent
-        agent = TD3(state_dim=state_dim, action_dim=action_dim, max_action=max_action, training_config=training_config)
+        agent = agent_class(state_dim=state_dim, action_dim=action_dim, max_action=max_action, training_config=training_config)
         if load_agent_path is not None:
             logging.info(f"Loading main agent from: {load_agent_path}")
             agent.load(load_agent_path)
-
-        # For self-play, use a bank of checkpoints for the opponent.
-        # Do NOT load any pre-existing checkpoints from disk in self_play mode.
-        opponent_bank_dir = os.path.join(models_dir, "opponent_bank")
-        os.makedirs(opponent_bank_dir, exist_ok=True)
-        opponent_bank_paths = []  # the bank builds during training
-
-        # Initialize opponent as a copy of the current agent (bank is empty initially)
-        opponent_agent = copy.deepcopy(agent)
-        logging.info("No opponent checkpoint available; using a copy of the main agent as the opponent.")
-        opponent = TrainedOpponent(opponent_agent, training=False)
-
+        opponent = TrainedOpponent(copy.deepcopy(agent), training=False)
         replay_buffer_main = ReplayBuffer(state_dim, action_dim, max_size=int(1e6))
     else:
-        agent = TD3(state_dim=state_dim, action_dim=action_dim, max_action=max_action, training_config=training_config)
+        agent = agent_class(state_dim=state_dim, action_dim=action_dim, max_action=max_action, training_config=training_config)
         if load_agent_path is not None:
             logging.info(f"Loading agent from: {load_agent_path}")
             agent.load(load_agent_path)
@@ -524,10 +517,10 @@ def main(
 
     # For mixed mode, load opponent agents if provided
     opponent_agents = []
-    if mode == "mixed" and opponent_agent_paths is not None:
+    if mode == "mixed" and opponent_agent_paths:
         for idx, path in enumerate(opponent_agent_paths):
             logging.info(f"Loading opponent agent {idx + 1} from: {path}")
-            trained_agent = TD3(state_dim=state_dim, action_dim=action_dim, max_action=max_action, training_config=training_config)
+            trained_agent = agent_class(state_dim=state_dim, action_dim=action_dim, max_action=max_action, training_config=training_config)
             trained_agent.load(path)
             trained_agent.critic.eval()
             trained_agent.actor.eval()
@@ -546,11 +539,6 @@ def main(
         "winrates_vs_scenarios": {}
     }
 
-    # For self-play, parameters for checkpoint bank
-    if mode == "self_play":
-        checkpoint_freq = training_config.get("checkpoint_freq", 1000)
-        max_bank_size = training_config.get("max_bank_size", 10)
-
     evaluation_winrates = {
         "strong": [],
         "weak": [],
@@ -560,47 +548,55 @@ def main(
     if mode == "self_play":
         evaluation_winrates["against_checkpoint"] = []
 
-    pbar = tqdm(total=training_config["max_episodes"], desc=f"Training {mode} Seed {seed}")
-    for episode in range(1, training_config["max_episodes"] + 1):
-        if mode == "self_play":
-            # In self-play mode, use the bank of checkpoints built during training.
-            if len(opponent_bank_paths) > 0 and (episode % checkpoint_freq == 1):
-                rand_checkpoint = random.choice(opponent_bank_paths)
-                print(f"Episode {episode}: Loading opponent from checkpoint {rand_checkpoint}")
-                opponent_agent = TD3(state_dim, action_dim, max_action, training_config)
-                opponent_agent.load(rand_checkpoint)
-                opponent = TrainedOpponent(opponent_agent, training=False)
-                logging.info(f"Episode {episode}: Loaded opponent from checkpoint {rand_checkpoint}")
-            elif len(opponent_bank_paths) == 0 and (episode % checkpoint_freq == 1):
-                opponent = TrainedOpponent(copy.deepcopy(agent), training=False)
-                print(f"Episode {episode}: No opponent checkpoint available; using current agent copy.")
-                logging.info(f"Episode {episode}: No opponent checkpoint available; using current agent copy.")
-        else:
-            if mode in ["vs_strong", "vs_weak", "mixed"]:
-                if mode == "mixed":
-                    idx = (episode - 1) % len(mixed_cycle)
-                    cycle_opponent_type, cycle_env_mode = mixed_cycle[idx]
-                    if cycle_opponent_type == "trained" and len(opponent_agents) > 0:
-                        trained_idx = get_trained_opponent_index(episode, len(opponent_agents))
-                        opponent_type = "trained"
-                        current_env_mode = cycle_env_mode
-                        selected_trained_agent = opponent_agents[trained_idx]
-                    else:
-                        opponent_type = cycle_opponent_type
-                        current_env_mode = cycle_env_mode
-                        selected_trained_agent = None
-                else:
-                    opponent_type = "strong" if mode == "vs_strong" else "weak"
-                    current_env_mode = env_mode
-                    selected_trained_agent = None
+    pbar = tqdm(total=episodes, desc=f"Training {mode} Seed {seed}")
 
-                if opponent_type in ["strong", "weak", "trained"]:
-                    if mode == "self_play":
-                        opponent = TrainedOpponent(opponent.agent, training=False)
-                    else:
-                        opponent = get_opponent(opponent_type, env, trained_agent=selected_trained_agent)
+    if mode == "self_play":
+        update_interval = training_config.get("update_eval_interval", 200)
+        update_eval_episodes = training_config.get("update_eval_episodes", 50)
+        update_threshold = training_config.get("update_accuracy_threshold", 0.8)
+
+    for episode in range(1, episodes + 1):
+
+        if mode == "self_play" and (episode % update_interval == 0):
+            stats_self = eval_policy_extended(
+                policy=agent, 
+                eval_episodes=update_eval_episodes, 
+                seed=seed+15, 
+                mode=h_env.Mode.NORMAL, 
+                opponent_type="trained", 
+                trained_agent=opponent.agent
+            )
+            current_win_rate = stats_self["win_rate"]
+            logging.info(f"Episode {episode}: Win rate against current opponent: {current_win_rate:.2f}")
+            if current_win_rate > update_threshold:
+                opponent = TrainedOpponent(copy.deepcopy(agent), training=False)
+                logging.info(f"Episode {episode}: Updated opponent due to high win rate ({current_win_rate:.2f})")
+
+        if mode in ["vs_strong", "vs_weak", "mixed"]:
+            if mode == "mixed":
+                idx = (episode - 1) % len(mixed_cycle)
+                cycle_opponent_type, cycle_env_mode = mixed_cycle[idx]
+                if cycle_opponent_type == "trained" and len(opponent_agents) > 0:
+                    trained_idx = get_trained_opponent_index(episode, len(opponent_agents))
+                    opponent_type = "trained"
+                    current_env_mode = cycle_env_mode
+                    selected_trained_agent = opponent_agents[trained_idx]
                 else:
-                    opponent = None
+                    opponent_type = cycle_opponent_type
+                    current_env_mode = cycle_env_mode
+                    selected_trained_agent = None
+            else:
+                opponent_type = "strong" if mode == "vs_strong" else "weak"
+                current_env_mode = env_mode
+                selected_trained_agent = None
+
+            if opponent_type in ["strong", "weak", "trained"]:
+                if mode == "self_play":
+                    opponent = TrainedOpponent(opponent.agent, training=False)
+                else:
+                    opponent = get_opponent(opponent_type, env, trained_agent=selected_trained_agent)
+            else:
+                opponent = None
 
         if env.env.mode != current_env_mode:
             env.close()
@@ -621,7 +617,6 @@ def main(
         cumulative_critic_loss = 0.0
         cumulative_actor_loss = 0.0
         loss_steps = 0
-        actor_loss_steps = 0
 
         while not done:
             episode_timesteps += 1
@@ -630,11 +625,11 @@ def main(
             if total_timesteps < training_config["start_timesteps"]:
                 action = env.env.action_space.sample()[:action_dim]
             else:
-                action = agent.act(np.array(state), add_noise=True)
+                action = agent.act(np.array(state))
 
             if opponent is not None:
                 opponent_obs = env.env.obs_agent_two()
-                opponent_action = opponent.act(opponent_obs, add_noise=False)
+                opponent_action = opponent.act(opponent_obs)
             else:
                 opponent_action = np.array([0, 0, 0, 0], dtype=np.float32)
 
@@ -660,15 +655,6 @@ def main(
         evaluation_results.append(episode_reward_main)
         plot_data["evaluation_results"].append(episode_reward_main)
         logging.info(f"Episode {episode} | Reward: {episode_reward_main:.2f} | Critic Loss: {avg_critic_loss:.4f} | Actor Loss: {avg_actor_loss:.4f}")
-
-        if mode == "self_play" and (episode % training_config.get("checkpoint_freq", 1000) == 0):
-            opponent_ckpt_path = os.path.join(os.path.join(models_dir, "opponent_bank"), f"opponent_checkpoint_{episode}.pth")
-            agent.save(opponent_ckpt_path)
-            opponent_bank_paths.append(opponent_ckpt_path)
-            logging.info(f"Added opponent checkpoint: {opponent_ckpt_path}")
-            if len(opponent_bank_paths) > training_config.get("max_bank_size", 10):
-                removed = opponent_bank_paths.pop(0)
-                logging.info(f"Removed oldest checkpoint from bank: {removed}")
 
         if episode % training_config["eval_freq"] == 0:
             logging.info(f"===== Evaluation at Episode {episode} =====")
@@ -780,54 +766,113 @@ def main(
     logging.info("Training completed successfully.")
     return final_evaluation_results
 
-
 # ============================================
-# Entry Point
+# Command-line Argument Parsing and Entry Point
 # ============================================
 if __name__ == "__main__":
-    mode = "self_play"  # options: "vs_weak", "vs_strong", "shooting", "defense", "mixed", "self_play"
-    episodes = 50000
-    seed = 46
-    save_model = True
-    custom_training_config = {
-        "discount": 0.99,
-        "tau": 0.005,
-        "policy_noise": 0.2,
-        "noise_clip": 0.5,
-        "policy_freq": 2,
-        "max_episodes": episodes,
-        "start_timesteps": 1000,
-        "eval_freq": 200,
-        "batch_size": 256,
-        "expl_noise_type": "pink",
-        "expl_noise": 0.1,
-        "pink_noise_params": {"exponent": 1.0, "fmin": 0.0},
-        "ou_noise_params": {"mu": 0.0, "theta": 0.15, "sigma": 0.2},
-        "use_layer_norm": True,
-        "ln_eps": 1e-5,
-        "save_model": save_model,
-        "save_model_freq": 10000,
-        "checkpoint_freq": 1000,
-        "max_bank_size": 10,
-        "use_rnd": True,
-        "rnd_weight": 1.0,
-        "rnd_lr": 1e-4,
-        "rnd_hidden_dim": 128,
-        "max_episode_steps": 600
-    }
-    # For mixed mode, you may list pre-trained opponent checkpoints.
-    # In self_play mode these are not loaded.
-    trained_opponent_paths = [
-        "models_hockey/mixed/seed_44/TD3_Hockey_mixed_seed_44_final.pth"
-    ]
+    parser = argparse.ArgumentParser(description="General Training Script for Hockey Environment with Custom Agents and Configurable Noise/RND/LayerNorm")
+    parser.add_argument("--mode", type=str, default="self_play",
+                        help="Training mode: vs_strong, vs_weak, shooting, defense, mixed, self_play")
+    parser.add_argument("--episodes", type=int, default=70000, help="Number of training episodes")
+    parser.add_argument("--seed", type=int, default=47, help="Random seed for training")
+    parser.add_argument("--save_model", action="store_true", help="Flag to save model checkpoints")
+    parser.add_argument("--agent_class", type=str, default="src.td3:TD3",
+                        help="Agent class in the format 'module_path:ClassName'. Default is 'src.td3:TD3'")
+    parser.add_argument("--config_file", type=str, default=None,
+                        help="Path to JSON file containing training configuration parameters")
+    parser.add_argument("--load_agent_path", type=str, default=None, help="Path to load a pre-trained agent checkpoint")
+    parser.add_argument("--opponent_agent_paths", type=str, nargs="*", default=None,
+                        help="List of paths for opponent agent checkpoints (for mixed mode)")
+
+    # New arguments for configuring exploration noise
+    parser.add_argument("--expl_noise_type", type=str, choices=["pink", "ou", "none"], default="pink",
+                        help="Exploration noise type: pink, ou, or none (to disable noise)")
+    parser.add_argument("--expl_noise", type=float, default=0.1, help="Exploration noise scale")
+    parser.add_argument("--pink_noise_exponent", type=float, default=1.0, help="Exponent for pink noise (if used)")
+    parser.add_argument("--pink_noise_fmin", type=float, default=0.0, help="Minimum frequency for pink noise (if used)")
+
+    # New arguments for configuring RND
+    group_rnd = parser.add_mutually_exclusive_group()
+    group_rnd.add_argument("--use_rnd", dest="use_rnd", action="store_true", help="Enable RND (Random Network Distillation)")
+    group_rnd.add_argument("--no_rnd", dest="use_rnd", action="store_false", help="Disable RND")
+    parser.set_defaults(use_rnd=True)
+    parser.add_argument("--rnd_weight", type=float, default=1.0, help="Weight for RND reward")
+    parser.add_argument("--rnd_lr", type=float, default=1e-4, help="Learning rate for RND")
+    parser.add_argument("--rnd_hidden_dim", type=int, default=128, help="Hidden dimension for RND network")
+
+    # New arguments for configuring layer normalization
+    group_ln = parser.add_mutually_exclusive_group()
+    group_ln.add_argument("--use_layer_norm", dest="use_layer_norm", action="store_true", help="Enable layer normalization")
+    group_ln.add_argument("--no_layer_norm", dest="use_layer_norm", action="store_false", help="Disable layer normalization")
+    parser.set_defaults(use_layer_norm=True)
+    parser.add_argument("--ln_eps", type=float, default=1e-5, help="Epsilon for layer normalization")
+
+    args = parser.parse_args()
+
+    # Load training configuration from file if provided, otherwise create an empty dictionary
+    if args.config_file is not None:
+        with open(args.config_file, "r") as f:
+            custom_training_config = json.load(f)
+    else:
+        custom_training_config = {}
+
+    training_config = {
+            "discount": 0.99,
+            "tau": 0.005,
+            "policy_noise": 0.2,
+            "noise_clip": 0.5,
+            "policy_freq": 2,
+            "start_timesteps": 1000,
+            "eval_freq": 100,
+            "batch_size": 2048,
+            "expl_noise_type": "pink",
+            "expl_noise": 0.1,
+            "pink_noise_params": {"exponent": 1.0, "fmin": 0.0},
+            "ou_noise_params": {"mu": 0.0, "theta": 0.15, "sigma": 0.2},
+            "use_layer_norm": True,
+            "ln_eps": 1e-5,
+            "save_model": True,
+            "save_model_freq": 10000,
+            "use_rnd": True,
+            "rnd_weight": 1.0,
+            "rnd_lr": 1e-4,
+            "rnd_hidden_dim": 128,
+            "max_episode_steps": 600,
+            "update_eval_interval": 200,
+            "update_eval_episodes": 50,
+            "update_accuracy_threshold": 0.8
+        }
+    
+   
+    # Update the training configuration with command-line arguments for noise, RND, and layer norm.
+    custom_training_config["expl_noise_type"] = args.expl_noise_type
+    custom_training_config["expl_noise"] = args.expl_noise
+    custom_training_config["pink_noise_params"] = {"exponent": args.pink_noise_exponent, "fmin": args.pink_noise_fmin}
+    # Optionally, you could add ou_noise_params if needed.
+    custom_training_config["use_rnd"] = args.use_rnd
+    custom_training_config["rnd_weight"] = args.rnd_weight
+    custom_training_config["rnd_lr"] = args.rnd_lr
+    custom_training_config["rnd_hidden_dim"] = args.rnd_hidden_dim
+    custom_training_config["use_layer_norm"] = args.use_layer_norm
+    custom_training_config["ln_eps"] = args.ln_eps
+
+     # if it is in args, update the training configuration with the provided values
+    training_config.update(custom_training_config)
+    print("===== Training Configuration =====")
+    print(json.dumps(training_config, indent=4))
+
+    # Dynamically load the agent class based on the argument
+    agent_class = get_agent_class(args.agent_class)
+
     final_results = main(
-        mode=mode,
-        episodes=episodes,
-        seed=seed,
-        save_model=save_model,
-        training_config=custom_training_config,
-        load_agent_path="models_hockey/mixed/seed_44/TD3_Hockey_mixed_seed_44_final.pth",
-        opponent_agent_paths=trained_opponent_paths
+        agent_class=agent_class,
+        mode=args.mode,
+        episodes=args.episodes,
+        seed=args.seed,
+        save_model=args.save_model,
+        training_config=training_config,
+        load_agent_path=args.load_agent_path,
+        opponent_agent_paths=args.opponent_agent_paths
     )
     print("===== Final Results =====")
     print(json.dumps(final_results, indent=4))

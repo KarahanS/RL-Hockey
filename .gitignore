@@ -10,6 +10,7 @@ evaluation_results_hockey
 graphs
 TD3/models_hockey
 TD3/results_hockey
+temp/
 
 # Distribution / packaging
 .Python
