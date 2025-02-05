@@ -68,6 +68,9 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
 
     # For visualization
     stats = Stats()
+    wandb_hparams = hparams.copy()
+    wandb_hparams["agent_type"] = agent_type
+    wandb_hparams["run_name"] = run_name
 
     # Define the rounds
     rounds = [
@@ -75,9 +78,6 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
     ]
 
     # Train the agent
-    wandb_hparams = hparams.copy()
-    wandb_hparams["agent_type"] = agent_type
-    wandb_hparams["run_name"] = run_name
 
     train_ddqn_agent_torch(
         agent_player,
@@ -176,7 +176,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--ddqn-iter-fit", type=int, default=32, help="Number of iterations to train the DDQN agent"
                         " for each episode")
-    parser.add_argument("--long-round-ep", type=int, default=60_000, help="Number of episodes for the long round")
+    parser.add_argument("--long-round-ep", type=int, default=100_000, help="Number of episodes for the long round")
     parser.add_argument("--print-freq", type=int, default=25, help="Frequency of printing the training statistics")
     parser.add_argument("--verbose", action="store_true", help="Verbosity of the training process")
     parser.add_argument("--skip-plot", action="store_true", help="Skip plotting the training statistics")
