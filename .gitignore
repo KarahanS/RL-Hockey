@@ -117,4 +117,5 @@ results
 DDQN/TODO.md
 DDQN/scripts/models/
 DDQN/scripts/plots/
+DDQN/scripts/wandb/
 env.yaml

@@ -17,7 +17,7 @@ import DDQN.DDQN as ddqn
 from DDQN.DQN import DQNAgent, TargetDQNAgent, DoubleDQNAgent
 from DDQN.DDQN import DuelingDQNAgent, DoubleDuelingDQNAgent
 from DDQN.trainer import Stats, Round, CustomHockeyMode, RandomWeaknessBasicOpponent, \
-    train_ddqn_agent_torch, train_ddqn_two_agents_torch
+    train_ddqn_agent_torch
 from DDQN.evaluation import compare_agents, display_stats
     
 import hockey.hockey_env as h_env
@@ -68,7 +68,12 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
     agent_opp_random = RandomWeaknessBasicOpponent(weakness_prob=0.1)
     agent_opp_self_scratch = copy.deepcopy(agent_player)  # Trained alongside the player
     agent_opp_self_frozen = copy.deepcopy(agent_player)  # Pretrained and frozen
-    agent_opp_self_frozen.load_state(model_dir)  # FIXME: Replace with a fixed path with proper weights
+    try:
+        agent_opp_self_frozen.load_state(model_dir)  # FIXME: Replace with fixed paths with proper weights of a default size
+    except RuntimeError:
+        print("WARNING: Pretrained model not found or incompatible with agent. Evaluation against frozen"
+              " self copy will use a non-initialized copy of the agent.")
+
     agent_opp_self = None  # Will be a copy of the player after training
 
     # For visualization
