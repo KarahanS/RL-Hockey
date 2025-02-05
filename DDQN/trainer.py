@@ -34,7 +34,7 @@ class RandomWeaknessBasicOpponent(BasicOpponent):
         super().__init__()
         self.weakness_prob = weakness_prob
     
-    def change_weakness(self):
+    def update_weakness(self):
         if np.random.rand() < self.weakness_prob:
             self.weak = True
         else:
@@ -46,14 +46,19 @@ class Round:
     A class to represent a sequence of opponents to train against
     """
 
-    def __init__(self, max_ep: int, agent_opp: DQNAgent | BasicOpponent, game_mode: CustomHockeyMode):
+    def __init__(self, max_ep: int, agent_opp: DQNAgent | BasicOpponent, game_mode: CustomHockeyMode,
+                 train_opp: bool = False):
         self.max_ep = max_ep
         self.agent_opp = agent_opp
         self.game_mode = game_mode
+        self.train_opp = train_opp
+
+        if train_opp:
+            assert isinstance(agent_opp, DQNAgent), "Opponent must be a DQNAgent to train it"
     
     def __str__(self):
-        # TODO: agents probably don't print well. Implement pretty-print wrappers and __str__ methods?
-        return f"Round(max_ep={self.max_ep}, agent_opp={self.agent_opp}, game_mode={self.game_mode})"
+        return f"Round(max_ep={self.max_ep}, agent_opp={str(type(self.agent_opp))[8:-2]}, " \
+            f"game_mode={self.game_mode}" + (", train_opp" if self.train_opp else "") + ")"
 
 
 class Stats:
@@ -85,6 +90,7 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, max_steps: int, roun
     print_freq: how often to print the current episode statistics
     wandb_hparams: hyperparameters to log to wandb
     """
+
     train_device = agent.train_device
 
     def np2gpu(data: np.ndarray) -> torch.Tensor:
@@ -109,6 +115,7 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, max_steps: int, roun
     for j, r in enumerate(rounds):
         max_ep = r.max_ep
         agent_opp = r.agent_opp
+        train_opp = r.train_opp
 
         custom_mode = r.game_mode
         if custom_mode == CustomHockeyMode.NORMAL:
@@ -139,11 +146,14 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, max_steps: int, roun
 
         for i in tqdm(range(max_ep)):
             total_reward = 0
+            if train_opp:
+                opp_total_reward = 0
+            
             ob_a1, _info = env.reset(mode=mode)
             ob_a2 = env.obs_agent_two()
 
-            if isinstance(r.agent_opp, RandomWeaknessBasicOpponent):
-                r.agent_opp.change_weakness()
+            if isinstance(agent_opp, RandomWeaknessBasicOpponent):
+                agent_opp.update_weakness()
 
             for t in range(max_steps):
                 done = False
@@ -152,6 +162,8 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, max_steps: int, roun
                 act_a1_discr = agent.act_torch(np2gpu(ob_a1))  # int
                 act_a1 = env.discrete_to_continous_action(act_a1_discr)  # numpy array
                 act_a2 = agent_opp.act(ob_a2)  # numpy array
+                if isinstance(agent_opp, DQNAgent):
+                    act_a2 = env.discrete_to_continous_action(act_a2)
 
                 ob_a1_next, reward, done, trunc, _info = env.step(
                     np.hstack([act_a1, act_a2])
@@ -162,9 +174,20 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, max_steps: int, roun
                     (ob_a1, act_a1_discr, reward, ob_a1_next, done)
                 )
 
-                ob_a1 = ob_a1_next
-                ob_a2 = env.obs_agent_two()
+                ob_a2_next = env.obs_agent_two()
 
+                if train_opp:
+                    opp_info = env.get_info_agent_two()
+                    opp_reward = env.get_reward_agent_two(opp_info)
+                    opp_total_reward += opp_reward
+
+                    agent_opp.store_transition(
+                        (ob_a2, act_a2, opp_reward, ob_a2_next, done)
+                    )
+                
+                ob_a1 = ob_a1_next
+                ob_a2 = ob_a2_next
+                
                 if done or trunc:
                     break
             
@@ -172,28 +195,27 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, max_steps: int, roun
             stats.losses.extend(fit_loss)
             stats.returns.append([i, total_reward, t+1])
 
+            if train_opp:
+                opp_fit_loss = agent_opp.train_torch(ddqn_iter_fit)
+
             # TODO: Reward could be utilized differently in each step.
             #   Logging here would have to be changed accordingly
             if wandb_hparams is not None:
-                wandb.log({
+                log_dict = {
                     "episode": total_eps,
                     "return": total_reward,
                     "loss": fit_loss[-1],
                     "steps": t+1
-                })
+                }
+                
+                if train_opp:
+                    log_dict["opp_return"] = opp_total_reward
+                    log_dict["opp_loss"] = opp_fit_loss[-1]
+                
+                wandb.log(log_dict)
                 total_eps += 1
 
             if verbose and (i % print_freq == 0 or i == max_ep - 1):
                 print(
                     f"Episode {i+1} | Return: {total_reward} | Loss: {fit_loss[-1]} | Done in {t+1} steps"
                 )
-
-
-def train_ddqn_two_agents_torch(agent_player: DQNAgent, agent_opp: DQNAgent, env: HockeyEnv, max_steps: int,
-                rounds: Iterable[Round], stats: Stats, ddqn_iter_fit=32, print_freq=25, tqdm=None, verbose=False):
-    """#TODO: docstring"""
-
-    # TODO: implementation
-    raise NotImplementedError
-
-    return ...

@@ -29,7 +29,7 @@ def running_mean(x, N):
 
 
 def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
-          plot_dir="./plots/", skip_eval=False):
+          plot_dir="./plots/", skip_eval=False, co_trained=False):
     # Load the environment
     env = h_env.HockeyEnv()
 
@@ -66,7 +66,10 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
     agent_opp_weak = h_env.BasicOpponent(weak=True)
     agent_opp_strong = h_env.BasicOpponent(weak=False)
     agent_opp_random = RandomWeaknessBasicOpponent(weakness_prob=0.1)
-    agent_opp_self = copy.deepcopy(agent_player)
+    agent_opp_self_scratch = copy.deepcopy(agent_player)  # Trained alongside the player
+    agent_opp_self_frozen = copy.deepcopy(agent_player)  # Pretrained and frozen
+    agent_opp_self_frozen.load_state(model_dir)  # FIXME: Replace with a fixed path with proper weights
+    agent_opp_self = None  # Will be a copy of the player after training
 
     # For visualization
     stats = Stats()
@@ -75,9 +78,14 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
     wandb_hparams["run_name"] = run_name
 
     # Define the rounds
-    rounds = [
-        Round(wandb_hparams["long_round_ep"], agent_opp_random, CustomHockeyMode.NORMAL)
-    ]
+    if co_trained:
+        rounds = [
+            Round(wandb_hparams["long_round_ep"], agent_opp_self_scratch, CustomHockeyMode.NORMAL, train_opp=True),
+        ]
+    else:
+        rounds = [
+            Round(wandb_hparams["long_round_ep"], agent_opp_random, CustomHockeyMode.NORMAL)
+        ] 
 
     # Train the agent
 
@@ -90,7 +98,7 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
         ddqn_iter_fit=hparams["ddqn_iter_fit"],
         tqdm=None,
         verbose=hparams["verbose"],
-        wandb_hparams=wandb_hparams,
+        wandb_hparams=wandb_hparams
     )
 
     # Save the agent model weights
@@ -102,10 +110,12 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
 
     if not skip_eval:
         # Evaluate the agent
-        #agent_player.load_state(model_dir)
+        agent_opp_self = copy.deepcopy(agent_player)
 
-        opp_list = [agent_opp_weak, agent_opp_strong, agent_opp_random, agent_opp_self]
-        for name, opp in zip(["Weak", "Strong", "Random", "Self-copied"], opp_list):
+        opp_list = [agent_opp_weak, agent_opp_strong, agent_opp_random, agent_opp_self,
+                    agent_opp_self_frozen, agent_opp_self_scratch]
+        name_list = ["Weak", "Strong", "Random", "Self-copied", "Pretrained Self-copy", "Co-trained Self-copy"]
+        for name, opp in zip(name_list, opp_list):
             stats = compare_agents(
                 agent_player, opp, env, num_matches=wandb_hparams["eval_num_matches"]
             )
@@ -185,6 +195,7 @@ if __name__ == "__main__":
     parser.add_argument("--skip-eval", action="store_true", help="Skip evaluation of the trained agent")
     parser.add_argument("--eval-num-matches", type=int, default=1000,
                         help="Number of matches to play for evaluation")
+    parser.add_argument("--co-trained", action="store_true", help="Train two agents: The player and its copy against each other")
 
     args = parser.parse_args()
 
@@ -212,4 +223,5 @@ if __name__ == "__main__":
 
     # TODO: Support hparam search with appropriate run names
     train(hparams, args.run_name, args.agent_type, model_dir=args.model_dir,
-          skip_plot=args.skip_plot, plot_dir=args.plot_dir, skip_eval=args.skip_eval)
+          skip_plot=args.skip_plot, plot_dir=args.plot_dir, skip_eval=args.skip_eval,
+          co_trained=args.co_trained)
