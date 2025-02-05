@@ -36,9 +36,9 @@ class RandomWeaknessBasicOpponent(BasicOpponent):
     
     def change_weakness(self):
         if np.random.rand() < self.weakness_prob:
-            self.weakness = True
+            self.weak = True
         else:
-            self.weakness = False
+            self.weak = False
 
 
 class Round:
