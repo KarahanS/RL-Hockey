@@ -176,7 +176,7 @@ if __name__ == "__main__":
     parser.add_argument("--tau", type=float, default=1e-4, help="Soft update parameter for the target network")
     parser.add_argument("--use-numpy", action="store_true", help="Use NumPy functionalities for training")
 
-    parser.add_argument("--ddqn-iter-fit", type=int, default=8, help="Number of iterations to train the DDQN agent"
+    parser.add_argument("--ddqn-iter-fit", type=int, default=32, help="Number of iterations to train the DDQN agent"
                         " for each episode")
     parser.add_argument("--long-round-ep", type=int, default=300_000, help="Number of episodes for the long round")
     parser.add_argument("--print-freq", type=int, default=25, help="Frequency of printing the training statistics")

@@ -118,8 +118,9 @@ def display_stats(stats_np, verbose=False):
         )
         print()
     
-    print("Player Win Rate:")
-    print(np.mean(stats_np["winners"] == 1))
+    print("Player Win Rate:", np.mean(stats_np["winners"] == 1))
+    print("Opponent Win Rate:", np.mean(stats_np["winners"] == -1))
+    print("Draw Rate:", np.mean(stats_np["winners"] == 0))
     print()
 
     print("Win Status (1 for win, 0 for draw, -1 for loss):")
