@@ -27,10 +27,8 @@ def running_mean(x, N):
     return (cumsum[N:] - cumsum[:-N]) / float(N)
 
 
-def train(hparams, run_name, agent_type, model_dir="./models/",
-          long_round_ep=300_000,
-          skip_plot=False, plot_dir="./plots/",
-          skip_eval=False, eval_num_matches=1000):
+def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
+          plot_dir="./plots/", skip_eval=False):
     # Load the environment
     env = h_env.HockeyEnv()
 
@@ -73,7 +71,7 @@ def train(hparams, run_name, agent_type, model_dir="./models/",
 
     # Define the rounds
     rounds = [
-        Round(long_round_ep, agent_opp_random, CustomHockeyMode.NORMAL)
+        Round(wandb_hparams["long_round_ep"], agent_opp_random, CustomHockeyMode.NORMAL)
     ]
 
     # Train the agent
@@ -107,7 +105,7 @@ def train(hparams, run_name, agent_type, model_dir="./models/",
         opp_list = [agent_opp_weak, agent_opp_strong, agent_opp_random]
         for name, opp in zip(["Weak", "Strong", "Random"], opp_list):
             stats = compare_agents(
-                agent_player, opp, env, num_matches=eval_num_matches
+                agent_player, opp, env, num_matches=wandb_hparams["eval_num_matches"]
             )
 
             print(f"{name} Opponent:")
@@ -178,7 +176,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--ddqn-iter-fit", type=int, default=32, help="Number of iterations to train the DDQN agent"
                         " for each episode")
-    parser.add_argument("--long-round-ep", type=int, default=300_000, help="Number of episodes for the long round")
+    parser.add_argument("--long-round-ep", type=int, default=60_000, help="Number of episodes for the long round")
     parser.add_argument("--print-freq", type=int, default=25, help="Frequency of printing the training statistics")
     parser.add_argument("--verbose", action="store_true", help="Verbosity of the training process")
     parser.add_argument("--skip-plot", action="store_true", help="Skip plotting the training statistics")
@@ -205,11 +203,11 @@ if __name__ == "__main__":
         "max_steps": 100000,  # Overridden by environment
         "ddqn_iter_fit": args.ddqn_iter_fit,
         "print_freq": args.print_freq,
+        "long_round_ep": args.long_round_ep,
+        "eval_num_matches": args.eval_num_matches,
         "verbose": args.verbose
     }
 
     # TODO: Support hparam search with appropriate run names
     train(hparams, args.run_name, args.agent_type, model_dir=args.model_dir,
-          long_round_ep=args.long_round_ep,
-          skip_plot=args.skip_plot, plot_dir=args.plot_dir,
-          skip_eval=args.skip_eval, eval_num_matches=args.eval_num_matches)
+          skip_plot=args.skip_plot, plot_dir=args.plot_dir, skip_eval=args.skip_eval)

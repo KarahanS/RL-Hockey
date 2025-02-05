@@ -84,7 +84,6 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, max_steps: int, roun
     tqdm: tqdm object (optional, for differentiating between notebook and console)
     print_freq: how often to print the current episode statistics
     wandb_hparams: hyperparameters to log to wandb
-    run_name: the name of the wandb run
     """
     train_device = agent.train_device
 
