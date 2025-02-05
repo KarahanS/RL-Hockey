@@ -1,4 +1,5 @@
 import argparse
+import copy
 import os
 import sys
 from importlib import reload
@@ -65,6 +66,7 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
     agent_opp_weak = h_env.BasicOpponent(weak=True)
     agent_opp_strong = h_env.BasicOpponent(weak=False)
     agent_opp_random = RandomWeaknessBasicOpponent(weakness_prob=0.1)
+    agent_opp_self = copy.deepcopy(agent_player)
 
     # For visualization
     stats = Stats()
@@ -102,8 +104,8 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
         # Evaluate the agent
         #agent_player.load_state(model_dir)
 
-        opp_list = [agent_opp_weak, agent_opp_strong, agent_opp_random]
-        for name, opp in zip(["Weak", "Strong", "Random"], opp_list):
+        opp_list = [agent_opp_weak, agent_opp_strong, agent_opp_random, agent_opp_self]
+        for name, opp in zip(["Weak", "Strong", "Random", "Self-copied"], opp_list):
             stats = compare_agents(
                 agent_player, opp, env, num_matches=wandb_hparams["eval_num_matches"]
             )

@@ -142,7 +142,7 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, max_steps: int, roun
             ob_a1, _info = env.reset(mode=mode)
             ob_a2 = env.obs_agent_two()
 
-            if type(r.agent_opp) == RandomWeaknessBasicOpponent:
+            if isinstance(r.agent_opp, RandomWeaknessBasicOpponent):
                 r.agent_opp.change_weakness()
 
             for t in range(max_steps):
