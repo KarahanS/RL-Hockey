@@ -48,6 +48,7 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
         case _:
             raise ValueError(f"Invalid agent type: {agent_type}")
     
+    # TODO: Can we just explode the hparams dict here?
     agent_player = agent_class(
         env.observation_space,
         env.discrete_action_space,
@@ -71,7 +72,10 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
     try:
         agent_opp_self_frozen.load_state(model_dir)  # FIXME: Replace with fixed paths with proper weights of a default size
     except RuntimeError:
-        print("WARNING: Pretrained model not found or incompatible with agent. Evaluation against frozen"
+        print("WARNING: Pretrained model incompatible with agent. Evaluation against frozen"
+              " self copy will use a non-initialized copy of the agent.")
+    except FileNotFoundError:
+        print("WARNING: Pretrained model not found. Evaluation against frozen"
               " self copy will use a non-initialized copy of the agent.")
 
     agent_opp_self = None  # Will be a copy of the player after training
