@@ -66,7 +66,7 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
     # Define the opponent(s)
     agent_opp_weak = h_env.BasicOpponent(weak=True)
     agent_opp_strong = h_env.BasicOpponent(weak=False)
-    agent_opp_random = RandomWeaknessBasicOpponent(weakness_prob=0.1)
+    agent_opp_random = RandomWeaknessBasicOpponent(weakness_prob=hparams["weakness_prob"])
     agent_opp_self_scratch = copy.deepcopy(agent_player)  # Trained alongside the player
     agent_opp_self_frozen = copy.deepcopy(agent_player)  # Pretrained and frozen
     try:
@@ -179,6 +179,7 @@ if __name__ == "__main__":
     parser.add_argument("agent_type", type=str, help="Type of the agent to train",
                         choices=["dqn", "targ-dqn", "doub-dqn", "duel-dqn", "doub-duel-dqn"])
 
+    # Agent hparam.s
     parser.add_argument("--model-dir", type=str, default="./models/",
                         help="Directory to save the trained model weights")
     parser.add_argument("--plot-dir", type=str, default="./plots/",
@@ -197,16 +198,20 @@ if __name__ == "__main__":
     parser.add_argument("--tau", type=float, default=1e-4, help="Soft update parameter for the target network")
     parser.add_argument("--use-numpy", action="store_true", help="Use NumPy functionalities for training")
 
+    # Opponent hparam.s
+    parser.add_argument("--weakness-prob", type=float, default=0.1, help="Probability of the opponent being weak")
+
+    # Training hparam.s
     parser.add_argument("--ddqn-iter-fit", type=int, default=32, help="Number of iterations to train the DDQN agent"
                         " for each episode")
     parser.add_argument("--long-round-ep", type=int, default=100_000, help="Number of episodes for the long round")
     parser.add_argument("--print-freq", type=int, default=25, help="Frequency of printing the training statistics")
-    parser.add_argument("--verbose", action="store_true", help="Verbosity of the training process")
     parser.add_argument("--skip-plot", action="store_true", help="Skip plotting the training statistics")
     parser.add_argument("--skip-eval", action="store_true", help="Skip evaluation of the trained agent")
     parser.add_argument("--eval-num-matches", type=int, default=1000,
                         help="Number of matches to play for evaluation")
     parser.add_argument("--co-trained", action="store_true", help="Train two agents: The player and its copy against each other")
+    parser.add_argument("--verbose", action="store_true", help="Verbosity of the training process")
 
     args = parser.parse_args()
 
