@@ -2,7 +2,6 @@ import os
 import sys
 
 import numpy as np
-import wandb
 
 root_dir = os.path.dirname(os.path.abspath("./"))
 if root_dir not in sys.path:
@@ -81,7 +80,7 @@ def compare_agents(agent_player: DQNAgent, agent_opp: DQNAgent | BasicOpponent, 
     return stats_np
 
 
-def display_stats(stats_np, opp_name, run_id=None, verbose=False):
+def display_stats(stats_np, opp_name, verbose=False):
     """
     Display statistics from compare_agents
 
@@ -132,21 +131,6 @@ def display_stats(stats_np, opp_name, run_id=None, verbose=False):
     returns_player = np.sum(stats_np["rewards_player"])
     returns_opp = np.sum(stats_np["rewards_opp"])
     returns_diff = np.abs(returns_player - returns_opp)
-
-    opp_name = opp_name.replace(" ", "_")
-    wandb_stats = {
-        (opp_name + "_win_rate_player"): win_rate_player,
-        (opp_name + "_win_rate_opp"): win_rate_opp,
-        (opp_name + "_draw_rate"): draw_rate,
-        (opp_name + "_win_status_mean"): win_status_mean,
-        (opp_name + "_win_status_std"): win_status_std,
-        (opp_name + "_returns_player"): returns_player,
-        (opp_name + "_returns_opp"): returns_opp,
-        (opp_name + "_returns_diff"): returns_diff
-    }
-    run = wandb.init(entity="kivanc-tezoren2", project="RL-DDQN",
-               id=run_id, resume="must")
-    run.config.update(wandb_stats)
 
     print("Player Win Rate:", win_rate_player)
     print("Opponent Win Rate:", win_rate_opp)

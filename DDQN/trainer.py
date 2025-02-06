@@ -1,3 +1,4 @@
+import copy
 import os
 import sys
 from enum import Enum
@@ -11,6 +12,7 @@ root_dir = os.path.dirname(os.path.abspath("../"))
 if root_dir not in sys.path:
     sys.path.append(root_dir)
 
+from DDQN.evaluation import compare_agents, display_stats
 from DDQN.DQN import DQNAgent
 from hockey.hockey_env import Mode as HockeyMode
 from hockey.hockey_env import HockeyEnv, BasicOpponent
@@ -74,8 +76,8 @@ class Stats:
 
 
 def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, max_steps: int, rounds: Iterable[Round],
-                stats: Stats, ddqn_iter_fit=32, print_freq=25, tqdm=None, verbose=False,
-                wandb_hparams=None):
+                stats: Stats, eval_opps_dict: dict, ddqn_iter_fit=32, eval_freq=500, print_freq=25,
+                tqdm=None, verbose=False, wandb_hparams=None):
     """
     Train the agent in the hockey environment
 
@@ -85,17 +87,20 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, max_steps: int, roun
     max_steps: the maximum number of steps to train for each episode
     rounds: describing the sequence of opponents to train against
     stats: object to store the statistics of the training process
+    eval_opps_dict: dictionary containing the opponents to evaluate against and their names
     ddqn_iter_fit: the number of iterations to train the DDQN agent for
+    eval_freq: the episode frequency of evaluating the agent
     tqdm: tqdm object (optional, for differentiating between notebook and console)
     print_freq: how often to print the current episode statistics
     wandb_hparams: hyperparameters to log to wandb
     """
 
     train_device = agent.train_device
-
     def np2gpu(data: np.ndarray) -> torch.Tensor:
         return torch.from_numpy(data).float().to(train_device)
     
+    total_eps = 0
+
     if wandb_hparams is not None:
         wandb_hparams["rounds"] = [str(r) for r in rounds]
         run_name = wandb_hparams.pop("run_name")
@@ -110,8 +115,6 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, max_steps: int, roun
             config=wandb_hparams
         )
         run_id = run.id
-        
-        total_eps = 0
     else:
         run_id = None
 
@@ -219,11 +222,50 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, max_steps: int, roun
                     log_dict["opp_loss"] = opp_fit_loss[-1]
                 
                 wandb.log(log_dict)
-                total_eps += 1
 
             if verbose and (i % print_freq == 0 or i == max_ep - 1):
                 print(
                     f"Episode {i+1} | Return: {total_reward} | Loss: {fit_loss[-1]} | Done in {t+1} steps"
                 )
+            
+            if (eval_freq > 0) and (total_eps % eval_freq == 0 or i == max_ep - 1):
+                # Evaluate the agent
+                agent_opp_self = copy.deepcopy(agent)
+                eval_opps_dict["Self-copied"] = agent_opp_self
+
+                for name, opp in eval_opps_dict.items():
+                    stats = compare_agents(
+                        agent, opp, env, num_matches=wandb_hparams["eval_num_matches"]
+                    )
+
+                    win_rate_player = np.mean(stats["winners"] == 1)
+                    win_rate_opp = np.mean(stats["winners"] == -1)
+                    draw_rate = np.mean(stats["winners"] == 0)
+
+                    win_status_mean = np.mean(stats["winners"])
+                    win_status_std = np.std(stats["winners"])
+
+                    returns_player = np.sum(stats["rewards_player"])
+                    returns_opp = np.sum(stats["rewards_opp"])
+                    returns_diff = np.abs(returns_player - returns_opp)
+
+                    name = name.replace(" ", "_").lower()
+                    # Log the statistics to wandb
+                    if wandb_hparams is not None:
+                        wandb.log({f"eval/{name}_player_win_rate": win_rate_player})
+                        wandb.log({f"eval/{name}_opp_win_rate": win_rate_opp})
+                        wandb.log({f"eval/{name}_draw_rate": draw_rate})
+                        wandb.log({f"eval/{name}_returns_diff": returns_diff})
+                        wandb.log({f"eval/{name}_win_status_mean": win_status_mean})
+                        wandb.log({f"eval/{name}_win_status_std": win_status_std})
+                
+                    if i == max_ep - 1 and verbose:
+                        print(f"Evaluated against opponent: {name}")
+                        display_stats(stats, name, verbose=True)
+                        
+                del eval_opps_dict["Self-copied"]
+                del agent_opp_self
+            
+            total_eps += 1
 
     return run_id

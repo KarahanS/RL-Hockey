@@ -29,7 +29,7 @@ def running_mean(x, N):
 
 
 def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
-          plot_dir="./plots/", skip_eval=False, co_trained=False):
+          plot_dir="./plots/", eval_freq=500, co_trained=False):
     # Load the environment
     env = h_env.HockeyEnv()
 
@@ -81,7 +81,13 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
         print(f"WARNING: Error loading pretrained model: {e}. Evaluation against frozen"
               " self copy will use a non-initialized copy of the agent.")
 
-    agent_opp_self = None  # Will be a copy of the player after training
+    eval_opps_dict = {
+        "weak": agent_opp_weak,
+        "strong": agent_opp_strong,
+        "randweak_p" + f"{agent_opp_random.weakness_prob}": agent_opp_random,
+        "self_scratch": agent_opp_self_scratch,
+        "self_frozen": agent_opp_self_frozen
+    }
 
     # For visualization
     stats = Stats()
@@ -101,13 +107,14 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
 
     # Train the agent
 
-    run_id = train_ddqn_agent_torch(
+    train_ddqn_agent_torch(
         agent_player,
         env,
         max_steps=hparams["max_steps"],
         rounds=rounds,
         stats=stats,
         ddqn_iter_fit=hparams["ddqn_iter_fit"],
+        eval_freq=eval_freq,
         tqdm=None,
         verbose=hparams["verbose"],
         wandb_hparams=wandb_hparams
@@ -119,21 +126,6 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
     # Plot the statistics & save
     if not skip_plot:
         plot_stats(stats, dir=plot_dir)
-
-    if not skip_eval:
-        # Evaluate the agent
-        agent_opp_self = copy.deepcopy(agent_player)
-
-        opp_list = [agent_opp_weak, agent_opp_strong, agent_opp_random, agent_opp_self,
-                    agent_opp_self_frozen, agent_opp_self_scratch]
-        name_list = ["Weak", "Strong", "Random", "Self-copied", "Pretrained Self-copy", "Co-trained Self-copy"]
-        for name, opp in zip(name_list, opp_list):
-            stats = compare_agents(
-                agent_player, opp, env, num_matches=wandb_hparams["eval_num_matches"]
-            )
-
-            display_stats(stats, name, run_id, verbose=hparams["verbose"])
-            print("\n" + "#"*50 + "\n")
     
     # Finalize
     env.close()
@@ -199,7 +191,7 @@ if __name__ == "__main__":
     parser.add_argument("--use-numpy", action="store_true", help="Use NumPy functionalities for training")
 
     # Opponent hparam.s
-    parser.add_argument("--weakness-prob", type=float, default=0.1, help="Probability of the opponent being weak")
+    parser.add_argument("--weakness-prob", type=float, default=0.2, help="Probability of the opponent being weak")
 
     # Training hparam.s
     parser.add_argument("--ddqn-iter-fit", type=int, default=32, help="Number of iterations to train the DDQN agent"
@@ -207,7 +199,7 @@ if __name__ == "__main__":
     parser.add_argument("--long-round-ep", type=int, default=100_000, help="Number of episodes for the long round")
     parser.add_argument("--print-freq", type=int, default=25, help="Frequency of printing the training statistics")
     parser.add_argument("--skip-plot", action="store_true", help="Skip plotting the training statistics")
-    parser.add_argument("--skip-eval", action="store_true", help="Skip evaluation of the trained agent")
+    parser.add_argument("--eval-freq", type=int, default=500, help="Frequency of evaluating the agent")
     parser.add_argument("--eval-num-matches", type=int, default=1000,
                         help="Number of matches to play for evaluation")
     parser.add_argument("--co-trained", action="store_true", help="Train two agents: The player and its copy against each other")
@@ -239,5 +231,5 @@ if __name__ == "__main__":
 
     # TODO: Support hparam search with appropriate run names
     train(hparams, args.run_name, args.agent_type, model_dir=args.model_dir,
-          skip_plot=args.skip_plot, plot_dir=args.plot_dir, skip_eval=args.skip_eval,
+          skip_plot=args.skip_plot, plot_dir=args.plot_dir, eval_freq=args.eval_freq,
           co_trained=args.co_trained)
