@@ -3,6 +3,7 @@ import os
 import sys
 from enum import Enum
 from typing import Iterable
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -75,9 +76,9 @@ class Stats:
         self.losses_training_stages = losses_ts
 
 
-def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, max_steps: int, rounds: Iterable[Round],
-                stats: Stats, eval_opps_dict: dict, ddqn_iter_fit=32, eval_freq=500, print_freq=25,
-                tqdm=None, verbose=False, wandb_hparams=None):
+def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, model_dir: str, max_steps: int,
+                rounds: Iterable[Round], stats: Stats, eval_opps_dict: dict, ddqn_iter_fit=32,
+                eval_freq=500, print_freq=25, tqdm=None, verbose=False, wandb_hparams=None):
     """
     Train the agent in the hockey environment
 
@@ -229,6 +230,11 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, max_steps: int, roun
                 )
             
             if (eval_freq > 0) and (total_eps % eval_freq == 0 or i == max_ep - 1):
+                # Agent back-up
+                for p in Path(model_dir).glob("Q_model_ep_*.ckpt"):
+                    p.unlink()
+                agent.save_state(model_dir, f"Q_model_ep_{total_eps}.ckpt")
+
                 # Evaluate the agent
                 agent_opp_self = copy.deepcopy(agent)
                 eval_opps_dict["Self-copied"] = agent_opp_self

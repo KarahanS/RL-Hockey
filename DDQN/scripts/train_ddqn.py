@@ -18,7 +18,6 @@ from DDQN.DQN import DQNAgent, TargetDQNAgent, DoubleDQNAgent
 from DDQN.DDQN import DuelingDQNAgent, DoubleDuelingDQNAgent
 from DDQN.trainer import Stats, Round, CustomHockeyMode, RandomWeaknessBasicOpponent, \
     train_ddqn_agent_torch
-from DDQN.evaluation import compare_agents, display_stats
     
 import hockey.hockey_env as h_env
 
@@ -110,6 +109,7 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
     train_ddqn_agent_torch(
         agent_player,
         env,
+        model_dir=model_dir,
         max_steps=hparams["max_steps"],
         rounds=rounds,
         stats=stats,
