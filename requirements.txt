@@ -90,3 +90,4 @@ typing-extensions==4.9.0
 wcwidth==0.2.13
 widgetsnbextension==4.0.13
 zipp==3.21.0
+comprl @ git+https://github.com/martius-lab/teamproject-competition-server.git#egg=comprl&subdirectory=comprl
