@@ -77,6 +77,9 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
     except FileNotFoundError:
         print("WARNING: Pretrained model not found. Evaluation against frozen"
               " self copy will use a non-initialized copy of the agent.")
+    except Exception as e:
+        print(f"WARNING: Error loading pretrained model: {e}. Evaluation against frozen"
+              " self copy will use a non-initialized copy of the agent.")
 
     agent_opp_self = None  # Will be a copy of the player after training
 
@@ -129,7 +132,6 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
                 agent_player, opp, env, num_matches=wandb_hparams["eval_num_matches"]
             )
 
-            print(f"{name} Opponent:")
             display_stats(stats, name, run_id, verbose=hparams["verbose"])
             print("\n" + "#"*50 + "\n")
     

@@ -154,6 +154,20 @@ class DQNAgent(object):
         
         return losses
 
+    def save_state(self, save_dir):
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
+        
+        torch.save(
+            self.Q.state_dict(),
+            os.path.join(save_dir, "Q_model.ckpt")
+        )
+
+    def load_state(self, load_dir):
+        self.Q.load_state_dict(
+            torch.load(os.path.join(load_dir, "Q_model.ckpt"), weights_only=True)
+        )
+
 
 class TargetDQNAgent(DQNAgent):
     def __init__(self, observation_space, action_space, **userconfig):
@@ -251,20 +265,6 @@ class TargetDQNAgent(DQNAgent):
             losses.append(fit_loss)
 
         return losses
-
-    def save_state(self, save_dir):
-        if not os.path.exists(save_dir):
-            os.makedirs(save_dir)
-        
-        torch.save(
-            self.Q.state_dict(),
-            os.path.join(save_dir, "Q_model.ckpt")
-        )
-
-    def load_state(self, load_dir):
-        self.Q.load_state_dict(
-            torch.load(os.path.join(load_dir, "Q_model.ckpt"), weights_only=True)
-        )
 
 
 class DoubleDQNAgent(TargetDQNAgent):
