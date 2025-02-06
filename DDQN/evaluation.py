@@ -133,18 +133,20 @@ def display_stats(stats_np, opp_name, run_id=None, verbose=False):
     returns_opp = np.sum(stats_np["rewards_opp"])
     returns_diff = np.abs(returns_player - returns_opp)
 
-    wandb.init(entity="kivanc-tezoren2", project="RL-DDQN",
+    opp_name = opp_name.replace(" ", "_")
+    wandb_stats = {
+        (opp_name + "_win_rate_player"): win_rate_player,
+        (opp_name + "_win_rate_opp"): win_rate_opp,
+        (opp_name + "_draw_rate"): draw_rate,
+        (opp_name + "_win_status_mean"): win_status_mean,
+        (opp_name + "_win_status_std"): win_status_std,
+        (opp_name + "_returns_player"): returns_player,
+        (opp_name + "_returns_opp"): returns_opp,
+        (opp_name + "_returns_diff"): returns_diff
+    }
+    run = wandb.init(entity="kivanc-tezoren2", project="RL-DDQN",
                id=run_id, resume="must")
-    wandb.log({
-        "win_rate_player": win_rate_player,
-        "win_rate_opp": win_rate_opp,
-        "draw_rate": draw_rate,
-        "win_status_mean": win_status_mean,
-        "win_status_std": win_status_std,
-        "returns_player": returns_player,
-        "returns_opp": returns_opp,
-        "returns_diff": returns_diff
-    })
+    run.config.update(wandb_stats)
 
     print("Player Win Rate:", win_rate_player)
     print("Opponent Win Rate:", win_rate_opp)
