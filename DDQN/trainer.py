@@ -101,7 +101,7 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, max_steps: int, roun
         run_name = wandb_hparams.pop("run_name")
 
         # Initialize wandb
-        wandb.init(
+        run = wandb.init(
             # set the wandb project where this run will be logged
             project="RL-DDQN",
             name=run_name,
@@ -109,8 +109,11 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, max_steps: int, roun
             # track hyperparameters and run metadata
             config=wandb_hparams
         )
+        run_id = run.id
         
         total_eps = 0
+    else:
+        run_id = None
 
     for j, r in enumerate(rounds):
         max_ep = r.max_ep
@@ -222,3 +225,5 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, max_steps: int, roun
                 print(
                     f"Episode {i+1} | Return: {total_reward} | Loss: {fit_loss[-1]} | Done in {t+1} steps"
                 )
+
+    return run_id

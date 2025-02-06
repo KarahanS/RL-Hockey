@@ -98,7 +98,7 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
 
     # Train the agent
 
-    train_ddqn_agent_torch(
+    run_id = train_ddqn_agent_torch(
         agent_player,
         env,
         max_steps=hparams["max_steps"],
@@ -130,7 +130,7 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
             )
 
             print(f"{name} Opponent:")
-            display_stats(stats, verbose=hparams["verbose"])
+            display_stats(stats, name, run_id, verbose=hparams["verbose"])
             print("\n" + "#"*50 + "\n")
     
     # Finalize
