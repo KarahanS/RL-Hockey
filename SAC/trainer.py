@@ -24,16 +24,33 @@ class Trainer:
 
     def setup_environment(self):
         """Initialize the environment and set random seeds"""
-        if self.args.env_name == "LunarLander-v2":
+        # Handle Hockey environments
+        if self.args.env_name == "Hockey-v0":
+            # Extract mode from env_name
+            mode = 0  # default to NORMAL
+            if hasattr(self.args, 'hockey_mode'):
+                mode = self.args.hockey_mode
+            self.env = gym.make(self.args.env_name, mode=mode)
+        elif self.args.env_name == "Hockey-One-v0":
+            # For basic opponent environment
+            mode = 0  # default to NORMAL
+            weak_opponent = self.args.opponent_type == "weak_basic"
+            if hasattr(self.args, 'hockey_mode'):
+                mode = self.args.hockey_mode
+            self.env = gym.make(self.args.env_name, mode=mode, weak_opponent=weak_opponent)
+        # Handle LunarLander
+        elif self.args.env_name == "LunarLander-v2":
             self.env = gym.make(self.args.env_name, continuous=True)
+        # Handle all other environments
         else:
             self.env = gym.make(self.args.env_name)
 
+        # Set random seeds if specified
         if self.args.seed is not None:
             torch.manual_seed(self.args.seed)
             np.random.seed(self.args.seed)
             self.env.action_space.seed(self.args.seed)
-
+        
     def setup_agent(self):
         """Initialize the SAC agent"""
         critic_loss_fn = select_loss_function(self.args.loss_type)
