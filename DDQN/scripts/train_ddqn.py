@@ -65,7 +65,9 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
     agent_opp_strong = h_env.BasicOpponent(weak=False)
     agent_opp_random = RandomWeaknessBasicOpponent(weakness_prob=hparams["weakness_prob"])
     agent_opp_self_scratch = copy.deepcopy(agent_player)  # Trained alongside the player
-    agent_opp_self_frozen = copy.deepcopy(agent_player)  # Pretrained and frozen
+    # TODO: Include the frozen opp. when we have good DQN agent weights
+    """
+    agent_opp_self_frozen = copy.deepcopy(agent_player)  # Pretrained and frozen good DQN player
     try:
         agent_opp_self_frozen.load_state(model_dir)  # FIXME: Replace with fixed paths with proper weights of a default size
     except RuntimeError:
@@ -77,14 +79,16 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
     except Exception as e:
         print(f"WARNING: Error loading pretrained model: {e}. Evaluation against frozen"
               " self copy will use a non-initialized copy of the agent.")
+    """
 
     eval_opps_dict = {
         "weak": agent_opp_weak,
         "strong": agent_opp_strong,
-        "randweak_p" + f"{agent_opp_random.weakness_prob}": agent_opp_random,
-        "self_scratch": agent_opp_self_scratch,
-        "self_frozen": agent_opp_self_frozen
+        #"randweak_p" + f"{agent_opp_random.weakness_prob}": agent_opp_random,
+        #"self_frozen": agent_opp_self_frozen
     }
+    if co_trained:
+        eval_opps_dict["self_scratch"] = agent_opp_self_scratch
 
     # For visualization
     stats = Stats()
@@ -199,7 +203,7 @@ if __name__ == "__main__":
     parser.add_argument("--long-round-ep", type=int, default=100_000, help="Number of episodes for the long round")
     parser.add_argument("--print-freq", type=int, default=25, help="Frequency of printing the training statistics")
     parser.add_argument("--skip-plot", action="store_true", help="Skip plotting the training statistics")
-    parser.add_argument("--eval-freq", type=int, default=500, help="Frequency of evaluating the agent")
+    parser.add_argument("--eval-freq", type=int, default=10_000, help="Frequency of evaluating the agent")
     parser.add_argument("--eval-num-matches", type=int, default=1000,
                         help="Number of matches to play for evaluation")
     parser.add_argument("--co-trained", action="store_true", help="Train two agents: The player and its copy against each other")

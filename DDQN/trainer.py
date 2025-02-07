@@ -80,7 +80,7 @@ class Stats:
 def eval_task(agent_copy: DQNAgent, opps_dict_copy: dict, env_copy: HockeyEnv, curr_ep: int,
               curr_round_ep: int, max_eps: int, eval_num_matches: int, wandb_hparams: dict,
               print_lock: Lock, verbose=False):
-    def eval_opp(agent_loc: DQNAgent, name_loc: str, opp_loc: DQNAgent | BasicOpponent,
+    def eval_opp(agent_loc: DQNAgent, opp_loc: DQNAgent | BasicOpponent, name_loc: str,
                  env_loc: HockeyEnv):
         comp_stats = compare_agents(
             agent_loc, opp_loc, env_loc, num_matches=eval_num_matches
@@ -115,14 +115,14 @@ def eval_task(agent_copy: DQNAgent, opps_dict_copy: dict, env_copy: HockeyEnv, c
                 print(f"Evaluated against opponent: {name}")
                 display_stats(comp_stats, name, verbose=True)
     
-    env_copy.mode(HockeyMode.NORMAL)
+    env_copy.reset(HockeyMode.NORMAL)
     for name, opp in opps_dict_copy.items():
-        eval_opp(name, opp, env_copy)
+        eval_opp(agent_copy, opp, name, env_copy)
     
-    env_copy.mode(HockeyMode.TRAIN_SHOOTING)
-    eval_opp("Shooting Mode", opps_dict_copy[0], env_copy)  # Opponent does not matter
-    env_copy.mode(HockeyMode.TRAIN_DEFENSE)
-    eval_opp("Defense Mode", opps_dict_copy[0], env_copy)  # Opponent does not matter
+    env_copy.reset(HockeyMode.TRAIN_SHOOTING)
+    eval_opp(agent_copy, opps_dict_copy[0], "Shooting Mode", env_copy)  # Opponent does not matter
+    env_copy.reset(HockeyMode.TRAIN_DEFENSE)
+    eval_opp(agent_copy, opps_dict_copy[0], "Defense Mode", env_copy)  # Opponent does not matter
 
     del env_copy        
     del agent_copy
