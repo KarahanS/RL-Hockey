@@ -80,7 +80,7 @@ def compare_agents(agent_player: DQNAgent, agent_opp: DQNAgent | BasicOpponent, 
     return stats_np
 
 
-def display_stats(stats_np, verbose=False):
+def display_stats(stats_np, opp_name, verbose=False):
     """
     Display statistics from compare_agents
 
@@ -108,6 +108,7 @@ def display_stats(stats_np, verbose=False):
         print("  left player puck keep time:", np.mean(observation[16]))
         print("  right player puck keep time:", np.mean(observation[17]))
 
+    print(f"{opp_name} Opponent:")
     if verbose:
         print("Player Observation Mean:")
         print_observation_stats(np.mean(stats_np["obs_player"], axis=0))
@@ -120,19 +121,28 @@ def display_stats(stats_np, verbose=False):
         )
         print()
     
-    print("Player Win Rate:", np.mean(stats_np["winners"] == 1))
-    print("Opponent Win Rate:", np.mean(stats_np["winners"] == -1))
-    print("Draw Rate:", np.mean(stats_np["winners"] == 0))
+    win_rate_player = np.mean(stats_np["winners"] == 1)
+    win_rate_opp = np.mean(stats_np["winners"] == -1)
+    draw_rate = np.mean(stats_np["winners"] == 0)
+
+    win_status_mean = np.mean(stats_np["winners"])
+    win_status_std = np.std(stats_np["winners"])
+
+    returns_player = np.sum(stats_np["rewards_player"])
+    returns_opp = np.sum(stats_np["rewards_opp"])
+    returns_diff = np.abs(returns_player - returns_opp)
+
+    print("Player Win Rate:", win_rate_player)
+    print("Opponent Win Rate:", win_rate_opp)
+    print("Draw Rate:", draw_rate)
     print()
 
     print("Win Status (1 for win, 0 for draw, -1 for loss):")
-    print("  Mean:", np.mean(stats_np["winners"]))
-    print("  Std:", np.std(stats_np["winners"]))
+    print("  Mean:", win_status_mean)
+    print("  Std:", win_status_std)
     print()
 
     print("Returns:")
-    print("  Player:", np.sum(stats_np["rewards_player"]))
-    print("  Opponent:", np.sum(stats_np["rewards_opp"]))
-    print("  Difference:",
-        np.abs(np.sum(stats_np["rewards_player"]) - np.sum(stats_np["rewards_opp"]))
-    )
+    print("  Player:", returns_player)
+    print("  Opponent:", returns_opp)
+    print("  Difference:", returns_diff)

@@ -1,7 +1,10 @@
+import copy
 import os
 import sys
 from enum import Enum
 from typing import Iterable
+from pathlib import Path
+from threading import Thread, Lock
 
 import numpy as np
 import torch
@@ -11,6 +14,7 @@ root_dir = os.path.dirname(os.path.abspath("../"))
 if root_dir not in sys.path:
     sys.path.append(root_dir)
 
+from DDQN.evaluation import compare_agents, display_stats
 from DDQN.DQN import DQNAgent
 from hockey.hockey_env import Mode as HockeyMode
 from hockey.hockey_env import HockeyEnv, BasicOpponent
@@ -73,8 +77,61 @@ class Stats:
         self.losses_training_stages = losses_ts
 
 
-def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, max_steps: int, rounds: Iterable[Round],
-                stats: Stats, ddqn_iter_fit=32, print_freq=25, tqdm=None, verbose=False,
+def eval_task(agent_copy: DQNAgent, opps_dict_copy: dict, env_copy: HockeyEnv, curr_ep: int,
+              curr_round_ep: int, max_eps: int, eval_num_matches: int, wandb_hparams: dict,
+              print_lock: Lock, verbose=False):
+    def eval_opp(agent_loc: DQNAgent, opp_loc: DQNAgent | BasicOpponent, name_loc: str,
+                 env_loc: HockeyEnv):
+        comp_stats = compare_agents(
+            agent_loc, opp_loc, env_loc, num_matches=eval_num_matches
+        )
+
+        win_rate_player = np.mean(comp_stats["winners"] == 1)
+        win_rate_opp = np.mean(comp_stats["winners"] == -1)
+        draw_rate = np.mean(comp_stats["winners"] == 0)
+
+        win_status_mean = np.mean(comp_stats["winners"])
+        win_status_std = np.std(comp_stats["winners"])
+
+        returns_player = np.sum(comp_stats["rewards_player"])
+        returns_opp = np.sum(comp_stats["rewards_opp"])
+        returns_diff = np.abs(returns_player - returns_opp)
+
+        name_loc = name_loc.replace(" ", "_").lower()
+        # Log the statistics to wandb
+        if wandb_hparams is not None:
+            wandb.log({
+                "episode": curr_ep,
+                f"eval/{name_loc}_player_win_rate": win_rate_player,
+                f"eval/{name_loc}_opp_win_rate": win_rate_opp,
+                f"eval/{name_loc}_draw_rate": draw_rate,
+                f"eval/{name_loc}_returns_diff": returns_diff,
+                f"eval/{name_loc}_win_status_mean": win_status_mean,
+                f"eval/{name_loc}_win_status_std": win_status_std
+            })
+    
+        if curr_round_ep == max_eps - 1 and verbose:
+            with print_lock:
+                print(f"Evaluated against opponent: {name}")
+                display_stats(comp_stats, name, verbose=True)
+    
+    env_copy.reset(HockeyMode.NORMAL)
+    for name, opp in opps_dict_copy.items():
+        eval_opp(agent_copy, opp, name, env_copy)
+    
+    env_copy.reset(HockeyMode.TRAIN_SHOOTING)
+    eval_opp(agent_copy, opps_dict_copy[0], "Shooting Mode", env_copy)  # Opponent does not matter
+    env_copy.reset(HockeyMode.TRAIN_DEFENSE)
+    eval_opp(agent_copy, opps_dict_copy[0], "Defense Mode", env_copy)  # Opponent does not matter
+
+    del env_copy        
+    del agent_copy
+    del opps_dict_copy
+
+
+def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, model_dir: str, max_steps: int,
+                rounds: Iterable[Round], stats: Stats, eval_opps_dict: dict, ddqn_iter_fit=32,
+                eval_freq=500, eval_num_matches=1000, print_freq=25, tqdm=None, verbose=False,
                 wandb_hparams=None):
     """
     Train the agent in the hockey environment
@@ -85,23 +142,29 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, max_steps: int, roun
     max_steps: the maximum number of steps to train for each episode
     rounds: describing the sequence of opponents to train against
     stats: object to store the statistics of the training process
+    eval_opps_dict: dictionary containing the opponents to evaluate against and their names
     ddqn_iter_fit: the number of iterations to train the DDQN agent for
+    eval_freq: the episode frequency of evaluating the agent
+    eval_num_matches: the number of matches to evaluate the agent for
     tqdm: tqdm object (optional, for differentiating between notebook and console)
     print_freq: how often to print the current episode statistics
     wandb_hparams: hyperparameters to log to wandb
     """
 
     train_device = agent.train_device
-
     def np2gpu(data: np.ndarray) -> torch.Tensor:
         return torch.from_numpy(data).float().to(train_device)
     
+    total_eps = 0
+    eval_threads = []
+    print_lock = Lock()
+
     if wandb_hparams is not None:
         wandb_hparams["rounds"] = [str(r) for r in rounds]
         run_name = wandb_hparams.pop("run_name")
 
         # Initialize wandb
-        wandb.init(
+        run = wandb.init(
             # set the wandb project where this run will be logged
             project="RL-DDQN",
             name=run_name,
@@ -109,8 +172,9 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, max_steps: int, roun
             # track hyperparameters and run metadata
             config=wandb_hparams
         )
-        
-        total_eps = 0
+        run_id = run.id
+    else:
+        run_id = None
 
     for j, r in enumerate(rounds):
         max_ep = r.max_ep
@@ -216,9 +280,37 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, max_steps: int, roun
                     log_dict["opp_loss"] = opp_fit_loss[-1]
                 
                 wandb.log(log_dict)
-                total_eps += 1
 
             if verbose and (i % print_freq == 0 or i == max_ep - 1):
                 print(
                     f"Episode {i+1} | Return: {total_reward} | Loss: {fit_loss[-1]} | Done in {t+1} steps"
                 )
+            
+            if (eval_freq > 0) and (total_eps % eval_freq == 0 or i == max_ep - 1):
+                # Agent back-up
+                for p in Path(model_dir).glob("Q_model_ep_*.ckpt"):
+                    p.unlink()
+                agent.save_state(model_dir, f"Q_model_ep_{total_eps}.ckpt")
+
+                # Evaluate the agent
+                env_copy = copy.deepcopy(env)
+                agent_copy = copy.deepcopy(agent)
+                eval_opps_dict_copy = copy.deepcopy(eval_opps_dict)
+                eval_opps_dict_copy["Self-copied"] = agent_copy
+
+                eval_thread = Thread(
+                    target=eval_task,
+                    args=(
+                        agent_copy, eval_opps_dict_copy, env_copy, total_eps, i, max_ep,
+                        eval_num_matches, wandb_hparams, print_lock, verbose
+                    )
+                )
+                eval_thread.start()
+                eval_threads.append(eval_thread)
+            
+            total_eps += 1
+    
+    for thread in eval_threads:
+        thread.join()
+
+    return run_id

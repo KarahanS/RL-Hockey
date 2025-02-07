@@ -6,19 +6,16 @@ from importlib import reload
 
 import numpy as np
 from matplotlib import pyplot as plt
-from tqdm.notebook import tqdm
 
 # Adding the parent directory to the path to enable importing
 root_dir = os.path.dirname(os.path.abspath("../"))
 if root_dir not in sys.path:
     sys.path.append(root_dir)
 
-import DDQN.DDQN as ddqn
 from DDQN.DQN import DQNAgent, TargetDQNAgent, DoubleDQNAgent
 from DDQN.DDQN import DuelingDQNAgent, DoubleDuelingDQNAgent
 from DDQN.trainer import Stats, Round, CustomHockeyMode, RandomWeaknessBasicOpponent, \
     train_ddqn_agent_torch
-from DDQN.evaluation import compare_agents, display_stats
     
 import hockey.hockey_env as h_env
 
@@ -29,7 +26,7 @@ def running_mean(x, N):
 
 
 def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
-          plot_dir="./plots/", skip_eval=False, co_trained=False):
+          plot_dir="./plots/", eval_freq=500, co_trained=False):
     # Load the environment
     env = h_env.HockeyEnv()
 
@@ -48,6 +45,7 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
         case _:
             raise ValueError(f"Invalid agent type: {agent_type}")
     
+    # TODO: Can we just explode the hparams dict here?
     agent_player = agent_class(
         env.observation_space,
         env.discrete_action_space,
@@ -65,16 +63,32 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
     # Define the opponent(s)
     agent_opp_weak = h_env.BasicOpponent(weak=True)
     agent_opp_strong = h_env.BasicOpponent(weak=False)
-    agent_opp_random = RandomWeaknessBasicOpponent(weakness_prob=0.1)
+    agent_opp_random = RandomWeaknessBasicOpponent(weakness_prob=hparams["weakness_prob"])
     agent_opp_self_scratch = copy.deepcopy(agent_player)  # Trained alongside the player
-    agent_opp_self_frozen = copy.deepcopy(agent_player)  # Pretrained and frozen
+    # TODO: Include the frozen opp. when we have good DQN agent weights
+    """
+    agent_opp_self_frozen = copy.deepcopy(agent_player)  # Pretrained and frozen good DQN player
     try:
         agent_opp_self_frozen.load_state(model_dir)  # FIXME: Replace with fixed paths with proper weights of a default size
     except RuntimeError:
-        print("WARNING: Pretrained model not found or incompatible with agent. Evaluation against frozen"
+        print("WARNING: Pretrained model incompatible with agent. Evaluation against frozen"
               " self copy will use a non-initialized copy of the agent.")
+    except FileNotFoundError:
+        print("WARNING: Pretrained model not found. Evaluation against frozen"
+              " self copy will use a non-initialized copy of the agent.")
+    except Exception as e:
+        print(f"WARNING: Error loading pretrained model: {e}. Evaluation against frozen"
+              " self copy will use a non-initialized copy of the agent.")
+    """
 
-    agent_opp_self = None  # Will be a copy of the player after training
+    eval_opps_dict = {
+        "weak": agent_opp_weak,
+        "strong": agent_opp_strong,
+        #"randweak_p" + f"{agent_opp_random.weakness_prob}": agent_opp_random,
+        #"self_frozen": agent_opp_self_frozen
+    }
+    if co_trained:
+        eval_opps_dict["self_scratch"] = agent_opp_self_scratch
 
     # For visualization
     stats = Stats()
@@ -97,10 +111,14 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
     train_ddqn_agent_torch(
         agent_player,
         env,
+        model_dir=model_dir,
         max_steps=hparams["max_steps"],
         rounds=rounds,
         stats=stats,
+        eval_opps_dict=eval_opps_dict,
         ddqn_iter_fit=hparams["ddqn_iter_fit"],
+        eval_freq=eval_freq,
+        eval_num_matches=hparams["eval_num_matches"],
         tqdm=None,
         verbose=hparams["verbose"],
         wandb_hparams=wandb_hparams
@@ -112,22 +130,6 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
     # Plot the statistics & save
     if not skip_plot:
         plot_stats(stats, dir=plot_dir)
-
-    if not skip_eval:
-        # Evaluate the agent
-        agent_opp_self = copy.deepcopy(agent_player)
-
-        opp_list = [agent_opp_weak, agent_opp_strong, agent_opp_random, agent_opp_self,
-                    agent_opp_self_frozen, agent_opp_self_scratch]
-        name_list = ["Weak", "Strong", "Random", "Self-copied", "Pretrained Self-copy", "Co-trained Self-copy"]
-        for name, opp in zip(name_list, opp_list):
-            stats = compare_agents(
-                agent_player, opp, env, num_matches=wandb_hparams["eval_num_matches"]
-            )
-
-            print(f"{name} Opponent:")
-            display_stats(stats, verbose=hparams["verbose"])
-            print("\n" + "#"*50 + "\n")
     
     # Finalize
     env.close()
@@ -173,6 +175,7 @@ if __name__ == "__main__":
     parser.add_argument("agent_type", type=str, help="Type of the agent to train",
                         choices=["dqn", "targ-dqn", "doub-dqn", "duel-dqn", "doub-duel-dqn"])
 
+    # Agent hparam.s
     parser.add_argument("--model-dir", type=str, default="./models/",
                         help="Directory to save the trained model weights")
     parser.add_argument("--plot-dir", type=str, default="./plots/",
@@ -191,16 +194,20 @@ if __name__ == "__main__":
     parser.add_argument("--tau", type=float, default=1e-4, help="Soft update parameter for the target network")
     parser.add_argument("--use-numpy", action="store_true", help="Use NumPy functionalities for training")
 
+    # Opponent hparam.s
+    parser.add_argument("--weakness-prob", type=float, default=0.2, help="Probability of the opponent being weak")
+
+    # Training hparam.s
     parser.add_argument("--ddqn-iter-fit", type=int, default=32, help="Number of iterations to train the DDQN agent"
                         " for each episode")
     parser.add_argument("--long-round-ep", type=int, default=100_000, help="Number of episodes for the long round")
     parser.add_argument("--print-freq", type=int, default=25, help="Frequency of printing the training statistics")
-    parser.add_argument("--verbose", action="store_true", help="Verbosity of the training process")
     parser.add_argument("--skip-plot", action="store_true", help="Skip plotting the training statistics")
-    parser.add_argument("--skip-eval", action="store_true", help="Skip evaluation of the trained agent")
+    parser.add_argument("--eval-freq", type=int, default=10_000, help="Frequency of evaluating the agent")
     parser.add_argument("--eval-num-matches", type=int, default=1000,
                         help="Number of matches to play for evaluation")
     parser.add_argument("--co-trained", action="store_true", help="Train two agents: The player and its copy against each other")
+    parser.add_argument("--verbose", action="store_true", help="Verbosity of the training process")
 
     args = parser.parse_args()
 
@@ -228,5 +235,5 @@ if __name__ == "__main__":
 
     # TODO: Support hparam search with appropriate run names
     train(hparams, args.run_name, args.agent_type, model_dir=args.model_dir,
-          skip_plot=args.skip_plot, plot_dir=args.plot_dir, skip_eval=args.skip_eval,
+          skip_plot=args.skip_plot, plot_dir=args.plot_dir, eval_freq=args.eval_freq,
           co_trained=args.co_trained)
