@@ -6,14 +6,12 @@ from importlib import reload
 
 import numpy as np
 from matplotlib import pyplot as plt
-from tqdm.notebook import tqdm
 
 # Adding the parent directory to the path to enable importing
 root_dir = os.path.dirname(os.path.abspath("../"))
 if root_dir not in sys.path:
     sys.path.append(root_dir)
 
-import DDQN.DDQN as ddqn
 from DDQN.DQN import DQNAgent, TargetDQNAgent, DoubleDQNAgent
 from DDQN.DDQN import DuelingDQNAgent, DoubleDuelingDQNAgent
 from DDQN.trainer import Stats, Round, CustomHockeyMode, RandomWeaknessBasicOpponent, \
@@ -116,6 +114,7 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
         eval_opps_dict=eval_opps_dict,
         ddqn_iter_fit=hparams["ddqn_iter_fit"],
         eval_freq=eval_freq,
+        eval_num_matches=hparams["eval_num_matches"],
         tqdm=None,
         verbose=hparams["verbose"],
         wandb_hparams=wandb_hparams
