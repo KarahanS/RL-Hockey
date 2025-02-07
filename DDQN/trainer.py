@@ -97,6 +97,11 @@ def eval_task(agent_copy: DQNAgent, opps_dict_copy: dict, env_copy: HockeyEnv, c
         returns_opp = np.sum(comp_stats["rewards_opp"])
         returns_diff = np.abs(returns_player - returns_opp)
 
+        if curr_round_ep == max_eps - 1 and verbose:
+            with print_lock:
+                print(f"Evaluated against opponent: {name_loc}")
+                display_stats(comp_stats, name_loc, verbose=True)
+        
         name_loc = name_loc.replace(" ", "_").lower()
         # Log the statistics to wandb
         if wandb_hparams is not None:
@@ -110,19 +115,15 @@ def eval_task(agent_copy: DQNAgent, opps_dict_copy: dict, env_copy: HockeyEnv, c
                 f"eval/{name_loc}_win_status_std": win_status_std
             })
     
-        if curr_round_ep == max_eps - 1 and verbose:
-            with print_lock:
-                print(f"Evaluated against opponent: {name}")
-                display_stats(comp_stats, name, verbose=True)
-    
     env_copy.reset(HockeyMode.NORMAL)
     for name, opp in opps_dict_copy.items():
         eval_opp(agent_copy, opp, name, env_copy)
     
+    # Opponent does not matter for the following modes
     env_copy.reset(HockeyMode.TRAIN_SHOOTING)
-    eval_opp(agent_copy, opps_dict_copy[0], "Shooting Mode", env_copy)  # Opponent does not matter
+    eval_opp(agent_copy, opps_dict_copy[opps_dict_copy.keys()[0]], "Shooting Mode", env_copy)
     env_copy.reset(HockeyMode.TRAIN_DEFENSE)
-    eval_opp(agent_copy, opps_dict_copy[0], "Defense Mode", env_copy)  # Opponent does not matter
+    eval_opp(agent_copy, opps_dict_copy[opps_dict_copy.keys()[0]], "Defense Mode", env_copy)
 
     del env_copy        
     del agent_copy
