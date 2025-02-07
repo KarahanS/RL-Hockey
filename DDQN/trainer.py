@@ -4,6 +4,7 @@ import sys
 from enum import Enum
 from typing import Iterable
 from pathlib import Path
+from threading import Thread, Lock
 
 import numpy as np
 import torch
@@ -76,6 +77,46 @@ class Stats:
         self.losses_training_stages = losses_ts
 
 
+def eval_task(agent_copy: DQNAgent, opps_dict_copy: dict, env: HockeyEnv, curr_ep: int,
+              curr_round_ep: int, max_eps: int, wandb_hparams: dict, print_lock: Lock, verbose=False):
+    for name, opp in opps_dict_copy.items():
+        comp_stats = compare_agents(
+            agent_copy, opp, env, num_matches=wandb_hparams["eval_num_matches"]
+        )
+
+        win_rate_player = np.mean(comp_stats["winners"] == 1)
+        win_rate_opp = np.mean(comp_stats["winners"] == -1)
+        draw_rate = np.mean(comp_stats["winners"] == 0)
+
+        win_status_mean = np.mean(comp_stats["winners"])
+        win_status_std = np.std(comp_stats["winners"])
+
+        returns_player = np.sum(comp_stats["rewards_player"])
+        returns_opp = np.sum(comp_stats["rewards_opp"])
+        returns_diff = np.abs(returns_player - returns_opp)
+
+        name = name.replace(" ", "_").lower()
+        # Log the statistics to wandb
+        if wandb_hparams is not None:
+            wandb.log({
+                "episode": curr_ep,
+                f"eval/{name}_player_win_rate": win_rate_player,
+                f"eval/{name}_opp_win_rate": win_rate_opp,
+                f"eval/{name}_draw_rate": draw_rate,
+                f"eval/{name}_returns_diff": returns_diff,
+                f"eval/{name}_win_status_mean": win_status_mean,
+                f"eval/{name}_win_status_std": win_status_std
+            })
+    
+        if curr_round_ep == max_eps - 1 and verbose:
+            with print_lock:
+                print(f"Evaluated against opponent: {name}")
+                display_stats(comp_stats, name, verbose=True)
+            
+    del agent_copy
+    del opps_dict_copy
+
+
 def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, model_dir: str, max_steps: int,
                 rounds: Iterable[Round], stats: Stats, eval_opps_dict: dict, ddqn_iter_fit=32,
                 eval_freq=500, print_freq=25, tqdm=None, verbose=False, wandb_hparams=None):
@@ -101,6 +142,8 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, model_dir: str, max_
         return torch.from_numpy(data).float().to(train_device)
     
     total_eps = 0
+    eval_threads = []
+    print_lock = Lock()
 
     if wandb_hparams is not None:
         wandb_hparams["rounds"] = [str(r) for r in rounds]
@@ -236,45 +279,22 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, model_dir: str, max_
                 agent.save_state(model_dir, f"Q_model_ep_{total_eps}.ckpt")
 
                 # Evaluate the agent
-                agent_opp_self = copy.deepcopy(agent)
-                eval_opps_dict["Self-copied"] = agent_opp_self
+                agent_copy = copy.deepcopy(agent)
+                eval_opps_dict_copy = copy.deepcopy(eval_opps_dict)
+                eval_opps_dict_copy["Self-copied"] = agent_copy
 
-                for name, opp in eval_opps_dict.items():
-                    comp_stats = compare_agents(
-                        agent, opp, env, num_matches=wandb_hparams["eval_num_matches"]
+                eval_thread = Thread(
+                    target=eval_task,
+                    args=(
+                        agent_copy, eval_opps_dict_copy, env, total_eps, i, max_ep,
+                        wandb_hparams, print_lock, verbose
                     )
-
-                    win_rate_player = np.mean(comp_stats["winners"] == 1)
-                    win_rate_opp = np.mean(comp_stats["winners"] == -1)
-                    draw_rate = np.mean(comp_stats["winners"] == 0)
-
-                    win_status_mean = np.mean(comp_stats["winners"])
-                    win_status_std = np.std(comp_stats["winners"])
-
-                    returns_player = np.sum(comp_stats["rewards_player"])
-                    returns_opp = np.sum(comp_stats["rewards_opp"])
-                    returns_diff = np.abs(returns_player - returns_opp)
-
-                    name = name.replace(" ", "_").lower()
-                    # Log the statistics to wandb
-                    if wandb_hparams is not None:
-                        wandb.log({
-                            "episode": total_eps,
-                            f"eval/{name}_player_win_rate": win_rate_player,
-                            f"eval/{name}_opp_win_rate": win_rate_opp,
-                            f"eval/{name}_draw_rate": draw_rate,
-                            f"eval/{name}_returns_diff": returns_diff,
-                            f"eval/{name}_win_status_mean": win_status_mean,
-                            f"eval/{name}_win_status_std": win_status_std
-                        })
-                
-                    if i == max_ep - 1 and verbose:
-                        print(f"Evaluated against opponent: {name}")
-                        display_stats(comp_stats, name, verbose=True)
-                        
-                del eval_opps_dict["Self-copied"]
-                del agent_opp_self
+                )
+                eval_threads.append(eval_thread)
             
             total_eps += 1
+    
+    for thread in eval_thread:
+        thread.join()
 
     return run_id
