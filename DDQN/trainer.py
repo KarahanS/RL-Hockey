@@ -290,11 +290,12 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, model_dir: str, max_
                         wandb_hparams, print_lock, verbose
                     )
                 )
+                eval_thread.start()
                 eval_threads.append(eval_thread)
             
             total_eps += 1
     
-    for thread in eval_thread:
+    for thread in eval_threads:
         thread.join()
 
     return run_id
