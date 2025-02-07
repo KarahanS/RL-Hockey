@@ -240,34 +240,37 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, model_dir: str, max_
                 eval_opps_dict["Self-copied"] = agent_opp_self
 
                 for name, opp in eval_opps_dict.items():
-                    stats = compare_agents(
+                    comp_stats = compare_agents(
                         agent, opp, env, num_matches=wandb_hparams["eval_num_matches"]
                     )
 
-                    win_rate_player = np.mean(stats["winners"] == 1)
-                    win_rate_opp = np.mean(stats["winners"] == -1)
-                    draw_rate = np.mean(stats["winners"] == 0)
+                    win_rate_player = np.mean(comp_stats["winners"] == 1)
+                    win_rate_opp = np.mean(comp_stats["winners"] == -1)
+                    draw_rate = np.mean(comp_stats["winners"] == 0)
 
-                    win_status_mean = np.mean(stats["winners"])
-                    win_status_std = np.std(stats["winners"])
+                    win_status_mean = np.mean(comp_stats["winners"])
+                    win_status_std = np.std(comp_stats["winners"])
 
-                    returns_player = np.sum(stats["rewards_player"])
-                    returns_opp = np.sum(stats["rewards_opp"])
+                    returns_player = np.sum(comp_stats["rewards_player"])
+                    returns_opp = np.sum(comp_stats["rewards_opp"])
                     returns_diff = np.abs(returns_player - returns_opp)
 
                     name = name.replace(" ", "_").lower()
                     # Log the statistics to wandb
                     if wandb_hparams is not None:
-                        wandb.log({f"eval/{name}_player_win_rate": win_rate_player})
-                        wandb.log({f"eval/{name}_opp_win_rate": win_rate_opp})
-                        wandb.log({f"eval/{name}_draw_rate": draw_rate})
-                        wandb.log({f"eval/{name}_returns_diff": returns_diff})
-                        wandb.log({f"eval/{name}_win_status_mean": win_status_mean})
-                        wandb.log({f"eval/{name}_win_status_std": win_status_std})
+                        wandb.log({
+                            "episode": total_eps,
+                            f"eval/{name}_player_win_rate": win_rate_player,
+                            f"eval/{name}_opp_win_rate": win_rate_opp,
+                            f"eval/{name}_draw_rate": draw_rate,
+                            f"eval/{name}_returns_diff": returns_diff,
+                            f"eval/{name}_win_status_mean": win_status_mean,
+                            f"eval/{name}_win_status_std": win_status_std
+                        })
                 
                     if i == max_ep - 1 and verbose:
                         print(f"Evaluated against opponent: {name}")
-                        display_stats(stats, name, verbose=True)
+                        display_stats(comp_stats, name, verbose=True)
                         
                 del eval_opps_dict["Self-copied"]
                 del agent_opp_self
