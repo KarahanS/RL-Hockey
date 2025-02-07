@@ -121,9 +121,9 @@ def eval_task(agent_copy: DQNAgent, opps_dict_copy: dict, env_copy: HockeyEnv, c
     
     # Opponent does not matter for the following modes
     env_copy.reset(HockeyMode.TRAIN_SHOOTING)
-    eval_opp(agent_copy, opps_dict_copy[opps_dict_copy.keys()[0]], "Shooting Mode", env_copy)
+    eval_opp(agent_copy, next(iter(opps_dict_copy.values())), "Shooting Mode", env_copy)
     env_copy.reset(HockeyMode.TRAIN_DEFENSE)
-    eval_opp(agent_copy, opps_dict_copy[opps_dict_copy.keys()[0]], "Defense Mode", env_copy)
+    eval_opp(agent_copy, next(iter(opps_dict_copy.values())), "Defense Mode", env_copy)
 
     del env_copy        
     del agent_copy
