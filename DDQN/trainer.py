@@ -303,7 +303,8 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, model_dir: str, max_
                     target=eval_task,
                     args=(
                         agent_copy, eval_opps_dict_copy, env_copy, total_eps, i, max_ep,
-                        eval_num_matches, wandb_hparams, print_lock, verbose
+                        (1000 if i == max_ep - 1 else eval_num_matches),
+                        wandb_hparams, print_lock, verbose
                     )
                 )
                 eval_thread.start()
