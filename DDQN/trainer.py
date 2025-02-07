@@ -79,7 +79,7 @@ class Stats:
 
 def eval_task(agent_copy: DQNAgent, opps_dict_copy: dict, env: HockeyEnv, curr_ep: int,
               curr_round_ep: int, max_eps: int, wandb_hparams: dict, print_lock: Lock, verbose=False):
-    for name, opp in opps_dict_copy.items():
+    def eval_opp(name: str, opp: DQNAgent | BasicOpponent, env: HockeyEnv):
         comp_stats = compare_agents(
             agent_copy, opp, env, num_matches=wandb_hparams["eval_num_matches"]
         )
@@ -112,7 +112,17 @@ def eval_task(agent_copy: DQNAgent, opps_dict_copy: dict, env: HockeyEnv, curr_e
             with print_lock:
                 print(f"Evaluated against opponent: {name}")
                 display_stats(comp_stats, name, verbose=True)
-            
+    
+    for name, opp in opps_dict_copy.items():
+        eval_opp(name, opp, env)
+    
+    env_copy = copy.deepcopy(env)
+    env_copy.mode(HockeyMode.TRAIN_SHOOTING)
+    eval_opp("Shooting Mode", opps_dict_copy[0], env_copy)  # Opponent does not matter
+    env_copy.mode(HockeyMode.TRAIN_DEFENSE)
+    eval_opp("Defense Mode", opps_dict_copy[0], env_copy)  # Opponent does not matter
+
+    del env_copy        
     del agent_copy
     del opps_dict_copy
 
