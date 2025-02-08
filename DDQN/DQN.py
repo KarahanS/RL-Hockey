@@ -11,7 +11,7 @@ if root_dir not in sys.path:
     sys.path.append(root_dir)
 
 from DDQN.q_function import QFunction
-from DDQN.memory import Memory, MemoryTorch
+from DDQN.memory import Memory, MemoryTorch, MemoryPERTorch
 
 
 class DQNAgent(object):
@@ -41,6 +41,7 @@ class DQNAgent(object):
         self._eps = self._config['eps']
         self._batch_size = self._config['batch_size']
         
+        self._per = self._config.get("per", False)
         self._use_torch = self._config.get("use_torch", False)
         
         # Q Network
@@ -54,8 +55,13 @@ class DQNAgent(object):
 
         self.train_device = self.Q.device
         if self._use_torch:
-            self.buffer = MemoryTorch(max_size=self._config["buffer_size"], device=self.train_device)
+            if self._per:
+                self.buffer = MemoryPERTorch(max_size=self._config["buffer_size"], device=self.train_device)
+            else:
+                self.buffer = MemoryTorch(max_size=self._config["buffer_size"], device=self.train_device)
         else:
+            if self._per:
+                raise NotImplementedError("PER is not implemented for numpy version")
             self.buffer = Memory(max_size=self._config["buffer_size"])
 
     # TODO: If the server allows so, deprecate numpy-only alternatives and rename the torch
@@ -127,13 +133,15 @@ class DQNAgent(object):
         return s, a, td_target
 
     def train(self, iter_fit=32):
-        losses = []
+        if self._per:
+            raise NotImplementedError("PER is not implemented for numpy version")
 
+        losses = []
         for _ in range(iter_fit):
             # Sample from the replay buffer
-            data = self.buffer.sample(batch=self._batch_size)
+            data = self.buffer.sample(batch_size=self._batch_size)
             s, a, td_target = self._training_objective(data)
-            
+
             # Optimize the lsq objective
             fit_loss = self.Q.fit(s, a, td_target)
             losses.append(fit_loss)
@@ -145,12 +153,24 @@ class DQNAgent(object):
 
         for _ in range(iter_fit):
             # Sample from the replay buffer
-            data = self.buffer.sample(batch=self._batch_size)
-            s, a, td_target = self._training_objective_torch(data)
+            data = self.buffer.sample(batch_size=self._batch_size)
+            s, a, td_target = self._training_objective_torch(data[:5])
             
-            # optimize the lsq objective
-            fit_loss = self.Q.fit_torch(s, a, td_target)
+            if self._per:
+                loss_weights = data[5]
+                indices = data[6]
+                q_value = self.Q.Q_value(s, a)
+            else:
+                loss_weights = None
+
+            # Optimize the lsq objective
+            fit_loss = self.Q.fit_torch(s, a, td_target, loss_weights)
             losses.append(fit_loss)
+
+            if self._per:
+                #priorities = torch.abs(fit_loss.flatten()) + self.buffer.epsilon
+                priorities = torch.abs(td_target - q_value) + self.buffer.epsilon
+                self.buffer.update_priorities(indices, priorities.flatten())
         
         return losses
 
@@ -233,6 +253,9 @@ class TargetDQNAgent(DQNAgent):
         return s, a, td_target
 
     def train(self, iter_fit=32):
+        if self._per:
+            raise NotImplementedError("PER is not implemented for numpy version")
+
         losses = []
         self.train_iter += 1
         if self.train_iter % self._config["update_target_every"] == 0:
@@ -240,7 +263,7 @@ class TargetDQNAgent(DQNAgent):
 
         for _ in range(iter_fit):
             # Sample from the replay buffer
-            data = self.buffer.sample(batch=self._batch_size)
+            data = self.buffer.sample(batch_size=self._batch_size)
             s, a, td_objective = self._training_objective(data)
             
             # Optimize the lsq objective
@@ -257,12 +280,24 @@ class TargetDQNAgent(DQNAgent):
 
         for _ in range(iter_fit):
             # Sample from the replay buffer
-            data = self.buffer.sample(batch=self._batch_size)
-            s, a, td_objective = self._training_objective_torch(data)
+            data = self.buffer.sample(batch_size=self._batch_size)
+            s, a, td_objective = self._training_objective_torch(data[:5])
+
+            if self._per:
+                loss_weights = data[5]
+                indices = data[6]
+                q_value = self.Q.Q_value(s, a)
+            else:
+                loss_weights = None
             
             # Optimize the lsq objective
             fit_loss = self.Q.fit_torch(s, a, td_objective)
             losses.append(fit_loss)
+
+            if self._per:
+                #priorities = torch.abs(fit_loss.flatten()) + self.buffer.epsilon
+                priorities = torch.abs(td_objective - q_value) + self.buffer.epsilon
+                self.buffer.update_priorities(indices, priorities.flatten())
 
         return losses
 

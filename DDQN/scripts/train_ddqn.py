@@ -49,6 +49,7 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
     agent_player = agent_class(
         env.observation_space,
         env.discrete_action_space,
+        per=hparams["per"],
         hidden_sizes=hparams["hidden_sizes"],
         hidden_sizes_A=hparams["hidden_sizes_A"],
         hidden_sizes_V=hparams["hidden_sizes_V"],
@@ -180,6 +181,7 @@ if __name__ == "__main__":
                         help="Directory to save the trained model weights")
     parser.add_argument("--plot-dir", type=str, default="./plots/",
                         help="Directory to save the plots")
+    parser.add_argument("--per", action="store_true", help="Use Prioritized Experience Replay")
     parser.add_argument("--hidden-sizes", type=int, nargs="+", default=[512],
                         help="Hidden layer sizes for the Q function")
     parser.add_argument("--hidden-sizes-A", type=int, nargs="+", default=[512, 512],
@@ -213,6 +215,7 @@ if __name__ == "__main__":
 
     hparams = {
         # Agent hparam.s
+        "per": args.per,
         "hidden_sizes": args.hidden_sizes,
         "hidden_sizes_A": args.hidden_sizes_A,
         "hidden_sizes_V": args.hidden_sizes_V,
