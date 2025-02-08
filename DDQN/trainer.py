@@ -131,8 +131,10 @@ def eval_task(agent_copy: DQNAgent, opps_dict_copy: dict, env_copy: HockeyEnv, c
     env_copy.reset(HockeyMode.TRAIN_DEFENSE)
     eval_opp(agent_copy, next(iter(opps_dict_copy.values())), "Defense Mode", env_copy)
 
-    del env_copy        
+    del env_copy
     del agent_copy
+    for o in opps_dict_copy:  # FIXME: no need for individual delete when FIXME in train_ddqn_agent_torch is fixed
+        del opps_dict_copy[o]
     del opps_dict_copy
 
 
@@ -301,10 +303,28 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, model_dir: str, max_
 
                 # Evaluation
                 # Copy agent: copy from dict and reinitialize to avoid deepcopy protocol error
-                agent_copy = copy.deepcopy(eval_opps_dict["self-copy"])
+                agent_copy = copy.deepcopy(eval_opps_dict["self_copy"])
                 agent_copy.load_state(model_dir, f"Q_model_ep_{total_eps}.ckpt")
 
-                eval_opps_dict_copy = copy.deepcopy(eval_opps_dict)  # Each thread needs its own copy
+                # Same for self_scratch opponent if it exists
+                # FIXME: This is hacky: need to pinpoint the exact tensor issue with MemoryPERTorch
+                #   and just copy the dict instead. Also see related FIXME in eval_task
+                #eval_opps_dict_copy = copy.deepcopy(eval_opps_dict)  # Each thread needs its own copy
+                eval_opps_dict_copy = {}
+                for name, opp in eval_opps_dict.items():
+                    if name == "self_scratch":
+                        agent_scratch = eval_opps_dict["self_scratch"]
+                        agent_scratch.save_state(model_dir, f"Q_model_ep_{total_eps}_COTRAIN_TEMP.ckpt")
+                        agent_scratch_copy = copy.deepcopy(eval_opps_dict["self_copy"])
+                        agent_scratch_copy.load_state(model_dir, f"Q_model_ep_{total_eps}_COTRAIN_TEMP.ckpt")
+
+                        for p in Path(model_dir).glob("Q_model_ep_*_COTRAIN_TEMP.ckpt"):
+                            p.unlink()
+
+                        eval_opps_dict_copy[name] = agent_scratch_copy
+                    else:
+                        eval_opps_dict_copy[name] = copy.deepcopy(opp)
+                
                 eval_opps_dict_copy["Self-copied"] = agent_copy
 
                 env_copy = copy.deepcopy(env)  # Each thread needs its own copy
