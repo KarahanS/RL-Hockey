@@ -232,14 +232,13 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, model_dir: str, max_
                 done = False
                 trunc = False
 
-                act_a1_discr = agent.act_torch(np2gpu(ob_a1))  # int
+                act_a1_discr = agent.act_torch(np2gpu(ob_a1), explore=True)  # int
                 act_a1 = env.discrete_to_continous_action(act_a1_discr)  # numpy array
-                act_a2_raw = agent_opp.act(ob_a2)  # numpy array
                 if isinstance(agent_opp, DQNAgent):
-                    act_a2_discr = act_a2_raw
-                    act_a2 = env.discrete_to_continous_action(act_a2_discr)
+                    act_a2_discr = agent_opp.act(ob_a2, explore=True)  # numpy array
+                    act_a2 = env.discrete_to_continous_action(act_a2_discr)  # numpy array
                 else:
-                    act_a2 = act_a2_raw
+                    act_a2 = agent_opp.act(ob_a2)  # numpy array
 
                 ob_a1_next, reward, done, trunc, _info = env.step(
                     np.hstack([act_a1, act_a2])

@@ -67,12 +67,14 @@ class DQNAgent(object):
     # TODO: If the server allows so, deprecate numpy-only alternatives and rename the torch
     #   versions to the original names
 
-    def act(self, observation: np.ndarray, eps=None):
+    def act(self, observation: np.ndarray, eps=None, explore=False):
+        """explore: Allow action exploration. Should not use in evaluation"""
+
         if eps is None:
             eps = self._eps
         
         # Epsilon greedy
-        if np.random.random() > eps:
+        if (not explore) or np.random.random() > eps:
             # Greedy action
             action = self.Q.greedyAction(observation)
         else:
@@ -81,12 +83,14 @@ class DQNAgent(object):
         
         return action
     
-    def act_torch(self, observation: torch.Tensor, eps=None):
+    def act_torch(self, observation: torch.Tensor, eps=None, explore=False):
+        """explore: Allow action exploration. Should not use in evaluation"""
+
         if eps is None:
             eps = self._eps
         
         # Epsilon greedy
-        if np.random.random() > eps:
+        if (not explore) or np.random.random() > eps:
             # Greedy action
             action = self.Q.greedyAction_torch(observation)
         else:
