@@ -1,6 +1,7 @@
 import copy
 import os
 import sys
+import time
 from enum import Enum
 from typing import Iterable
 from pathlib import Path
@@ -82,6 +83,8 @@ def eval_task(agent_copy: DQNAgent, opps_dict_copy: dict, env_copy: HockeyEnv, c
               print_lock: Lock, verbose=False):
     def eval_opp(agent_loc: DQNAgent, opp_loc: DQNAgent | BasicOpponent, name_loc: str,
                  env_loc: HockeyEnv):
+        start = time.time()
+
         comp_stats = compare_agents(
             agent_loc, opp_loc, env_loc, num_matches=eval_num_matches
         )
@@ -114,6 +117,9 @@ def eval_task(agent_copy: DQNAgent, opps_dict_copy: dict, env_copy: HockeyEnv, c
                 f"eval/{name_loc}_win_status_mean": win_status_mean,
                 f"eval/{name_loc}_win_status_std": win_status_std
             })
+        
+        end = time.time()
+        print(f"Evaluated against {name_loc} in {(end - start):.2f} seconds")
     
     env_copy.reset(HockeyMode.NORMAL)
     for name, opp in opps_dict_copy.items():
