@@ -299,12 +299,17 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, model_dir: str, max_
                     p.unlink()
                 agent.save_state(model_dir, f"Q_model_ep_{total_eps}.ckpt")
 
-                # Evaluate the agent
-                env_copy = copy.deepcopy(env)
-                agent_copy = copy.deepcopy(agent)
-                eval_opps_dict_copy = copy.deepcopy(eval_opps_dict)
+                # Evaluation
+                # Copy agent: copy from dict and reinitialize to avoid deepcopy protocol error
+                agent_copy = copy.deepcopy(eval_opps_dict["self-copy"])
+                agent_copy.load_state(model_dir, f"Q_model_ep_{total_eps}.ckpt")
+
+                eval_opps_dict_copy = copy.deepcopy(eval_opps_dict)  # Each thread needs its own copy
                 eval_opps_dict_copy["Self-copied"] = agent_copy
 
+                env_copy = copy.deepcopy(env)  # Each thread needs its own copy
+
+                # eval_task handles removing the copied objects
                 eval_thread = Thread(
                     target=eval_task,
                     args=(

@@ -183,9 +183,9 @@ class DQNAgent(object):
             os.path.join(save_dir, filename)
         )
 
-    def load_state(self, load_dir):
+    def load_state(self, load_dir, filename="Q_model.ckpt"):
         self.Q.load_state_dict(
-            torch.load(os.path.join(load_dir, "Q_model.ckpt"), weights_only=True)
+            torch.load(os.path.join(load_dir, filename), weights_only=True)
         )
 
 
@@ -291,7 +291,7 @@ class TargetDQNAgent(DQNAgent):
                 loss_weights = None
             
             # Optimize the lsq objective
-            fit_loss = self.Q.fit_torch(s, a, td_objective)
+            fit_loss = self.Q.fit_torch(s, a, td_objective, loss_weights)
             losses.append(fit_loss)
 
             if self._per:

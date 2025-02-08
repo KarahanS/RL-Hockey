@@ -66,7 +66,8 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
     agent_opp_strong = h_env.BasicOpponent(weak=False)
     agent_opp_random = RandomWeaknessBasicOpponent(weakness_prob=hparams["weakness_prob"])
     agent_opp_self_scratch = copy.deepcopy(agent_player)  # Trained alongside the player
-    # TODO: Include the frozen opp. when we have good DQN agent weights
+    agent_opp_self_copy = copy.deepcopy(agent_player)  # Copy of the player for evaluation - will be updated during training
+    # TODO: Include the frozen opp. below when we have good DQN agent weights
     """
     agent_opp_self_frozen = copy.deepcopy(agent_player)  # Pretrained and frozen good DQN player
     try:
@@ -86,7 +87,8 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
         "weak": agent_opp_weak,
         "strong": agent_opp_strong,
         #"randweak_p" + f"{agent_opp_random.weakness_prob}": agent_opp_random,
-        #"self_frozen": agent_opp_self_frozen
+        #"self_frozen": agent_opp_self_frozen,
+        "self_copy": agent_opp_self_copy
     }
     if co_trained:
         eval_opps_dict["self_scratch"] = agent_opp_self_scratch
