@@ -119,3 +119,10 @@ DDQN/scripts/models/
 DDQN/scripts/plots/
 DDQN/scripts/wandb/
 env.yaml
+
+# singularity
+*.sif
+*.def
+
+# slurm folder
+SAC/slurm/*

@@ -1,3 +1,7 @@
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.dirname(__file__)))  # Adds current directory to sys.path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))  # Adds parent directory
 import numpy as np
 import numpy as np
 from segment_tree import SumSegmentTree, MinSegmentTree
