@@ -1,3 +1,7 @@
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.dirname(__file__)))  # Adds current directory to sys.path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))  # Adds parent directory
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -7,7 +11,7 @@ from noise import *
 from memory import ReplayMemory, PrioritizedExperienceReplay, EREPrioritizedExperienceReplay
 from policies import Actor, Critic
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.set_num_threads(1)
 
 

@@ -1,0 +1,59 @@
+# Run name
+name: "per:true_lr:0.001"
+
+# Environment and seed
+env_name: "Hockey-v0"   # The Gym environment to train on ("Hockey-v0", "Hockey-One-v0", etc.)
+seed: 42                # Random seed for reproducibility
+
+# Learning rates and training loops
+lr: 0.001             # Learning rate used by both actor and critic optimizers
+max_episodes: 12000    # Maximum number of training episodes
+max_timesteps: 2000    # Maximum number of timesteps (steps) per episode
+
+# Loss / discounting
+loss_type: "mse"       # Critic loss function ("mse", "huber", "mae", etc.)
+discount: 0.99         # Discount factor γ for future rewards
+
+# Target network updates
+update_every: 1        # How frequently (in steps) to update the target networks
+
+# PER / ERE (Prioritized Experience Replay / Emphasizing Recent Experience)
+use_per: true          # Whether to use Prioritized Experience Replay
+use_ere: false         # Whether to use Emphasizing Recent Experience
+per_alpha: 0.6         # PER parameter α (priority exponent)
+per_beta: 0.4          # PER parameter β (importance sampling exponent)
+ere_eta0: 0.996        # Initial ERE decay rate
+ere_min_size: 2500     # Minimum replay buffer size before applying ERE
+
+# Logging / checkpointing
+save_interval: 500     # Save a checkpoint every N episodes
+log_interval: 20       # Print / log training information every N episodes
+buffer_size: 1000000   # Replay buffer size
+output_dir: "./results"  # Directory to store logs, checkpoints, etc.
+
+# Noise configuration (used by some policies for exploration)
+noise:
+  type: "normal"       # Type of noise ("normal", "ornstein", "colored", etc.)
+  sigma: 0.1           # Standard deviation for normal/pink noise
+  theta: 0.15          # Ornstein-Uhlenbeck parameter (if type = "ornstein")
+  dt: 0.01             # Ornstein-Uhlenbeck time step (if type = "ornstein")
+  beta: 1.0            # Exponent for colored noise (if type = "colored"/"pink")
+  seq_len: 1000        # Length of noise sequence to generate
+
+# Hockey-specific
+hockey:
+  mode: "NORMAL"       # Hockey mode: NORMAL, TRAIN_SHOOTING, or TRAIN_DEFENSE
+  opponent_type: "none"  # "none", "weak_basic", "human", etc.
+  keep_mode: true      # Whether the puck can be "kept" by the player
+
+# Evaluation settings
+eval_interval: 200   # Evaluate policy (win ratio, etc.) every N episodes (0 to disable)
+eval_episodes: 100    # Number of episodes per evaluation run
+
+# New advanced parameters
+batch_size: 256                # Batch size for each training update
+hidden_sizes_actor: [256, 256] # Hidden layer sizes for the actor network
+hidden_sizes_critic: [256, 256]  # Hidden layer sizes for the critic networks
+tau: 0.005                     # Target network update coefficient (Polyak averaging)
+learn_alpha: true              # Whether to learn the temperature parameter α
+alpha: 0.3                   # Initial or fixed temperature parameter (if learn_alpha = false)
