@@ -15,6 +15,7 @@ root_dir = os.path.dirname(os.path.abspath("../"))
 if root_dir not in sys.path:
     sys.path.append(root_dir)
 
+from DDQN.action_space import CustomActionSpace
 from DDQN.evaluation import compare_agents, display_stats
 from DDQN.DQN import DQNAgent
 from hockey.hockey_env import Mode as HockeyMode
@@ -233,10 +234,10 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, model_dir: str, max_
                 trunc = False
 
                 act_a1_discr = agent.act_torch(np2gpu(ob_a1), explore=True)  # int
-                act_a1 = env.discrete_to_continous_action(act_a1_discr)  # numpy array
+                act_a1 = CustomActionSpace.discrete_to_continuous(act_a1_discr)  # numpy array
                 if isinstance(agent_opp, DQNAgent):
                     act_a2_discr = agent_opp.act(ob_a2, explore=True)  # numpy array
-                    act_a2 = env.discrete_to_continous_action(act_a2_discr)  # numpy array
+                    act_a2 = CustomActionSpace.discrete_to_continuous(act_a2_discr)  # numpy array
                 else:
                     act_a2 = agent_opp.act(ob_a2)  # numpy array
 

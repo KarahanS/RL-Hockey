@@ -8,7 +8,7 @@ root_dir = os.path.dirname(os.path.abspath("./"))
 if root_dir not in sys.path:
     sys.path.append(root_dir)
 
-from SAC.src.segment_tree import SegmentTree, MinSegmentTree, SumSegmentTree
+from SAC.src.segment_tree import MinSegmentTree, SumSegmentTree
 
 
 # class to store transitions
