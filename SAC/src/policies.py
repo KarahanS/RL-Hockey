@@ -115,8 +115,8 @@ class Actor(FeedForward):
             self.noise = OrnsteinUhlenbeckActionNoise(
                 mean=np.zeros(action_dim),
                 sigma=np.ones(action_dim) * noise_config["sigma"],
-                theta=noise_config["noise_theta"],
-                dt=noise_config["noise_dt"],
+                theta=noise_config["theta"],
+                dt=noise_config["dt"],
             )
         elif noise_type == "colored":
             self.noise = ColoredActionNoise(
@@ -166,6 +166,47 @@ class Actor(FeedForward):
         log_prob = log_prob.sum(1, keepdim=True)
 
         return action, log_prob
+    
+    def get_state(self):
+        """
+        Get the entire internal state for checkpointing:
+         - model (CNN + MLP) parameters
+         - optimizer parameters
+         - noise state (if implemented)
+        """
+        state = {
+            "model_state_dict": self.state_dict(),
+            "optimizer_state_dict": self.optimizer.state_dict(),
+            # Noise state (if the noise class has get_state())
+            "noise_state": self.noise.get_state() if hasattr(self.noise, "get_state") else None,
+        }
+        return state
+
+    def set_state(self, state: dict):
+        """
+        Restore the internal state from a checkpoint dictionary.
+
+        If any keys (like "optimizer_state_dict" or "noise_state") are not present,
+        we skip them so that you can load model weights only.
+        """
+        # 1. Load the model weights (mandatory for inference)
+        if "model_state_dict" in state:
+            self.load_state_dict(state["model_state_dict"])
+        else:
+            print("[Actor] No 'model_state_dict' found in the checkpoint. Skipping model weights loading.")
+
+        # 2. Load the optimizer state (only if provided)
+        if "optimizer_state_dict" in state:
+            self.optimizer.load_state_dict(state["optimizer_state_dict"])
+        else:
+            print("[Actor] No 'optimizer_state_dict' found in the checkpoint. Skipping optimizer state loading.")
+
+        # 3. Load the noise state (only if provided)
+        noise_state = state.get("noise_state", None)
+        if noise_state is not None and hasattr(self.noise, "set_state"):
+            self.noise.set_state(noise_state)
+        else:
+            print("[Actor] No 'noise_state' found in the checkpoint or noise has no set_state(). Skipping noise state.")
 
 
 class Critic(FeedForward):
@@ -209,6 +250,34 @@ class Critic(FeedForward):
         x = torch.cat([features, action], dim=1)
         return super().forward(x)
 
+    def get_state(self):
+        """
+        Get the entire internal state for checkpointing:
+         - model (CNN + MLP) parameters
+         - optimizer parameters
+        """
+        return {
+            "model_state_dict": self.state_dict(),
+            "optimizer_state_dict": self.optimizer.state_dict(),
+        }
+
+    def set_state(self, state: dict):
+        """
+        Restore the internal state from a checkpoint dictionary.
+
+        If no optimizer_state_dict is found, we skip loading that part.
+        """
+        # 1. Load the model weights
+        if "model_state_dict" in state:
+            self.load_state_dict(state["model_state_dict"])
+        else:
+            print("[Critic] No 'model_state_dict' found in the checkpoint. Skipping model weights loading.")
+
+        # 2. Load the optimizer state (only if provided)
+        if "optimizer_state_dict" in state:
+            self.optimizer.load_state_dict(state["optimizer_state_dict"])
+        else:
+            print("[Critic] No 'optimizer_state_dict' found in the checkpoint. Skipping optimizer state loading.")
 
 # Example usage:
 """

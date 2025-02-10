@@ -10,9 +10,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from sac import (
     SACAgent,
-    select_loss_function,
 )
-from ..hockey import hockey_env
 
 from noise import *
 from enum import Enum
@@ -25,50 +23,15 @@ class Mode(Enum):
 class Trainer:
     def __init__(self, args):
         self.args = args
-        self.register_hockey_env()  # Ensure environments are registered before use
         self.setup_environment()
         self.setup_agent()
         self.setup_logging()
 
-    def register_hockey_env(self):
-        """Dynamically registers the Hockey environments with user-defined mode and opponent settings."""
-        try:
-            gym.register(
-                id="Hockey-v0",
-                entry_point="hockey_env:HockeyEnv",
-                kwargs={"mode": Mode[self.args.hockey_mode.upper()].value if isinstance(self.args.hockey_mode, str) else self.args.hockey_mode},
-            )
-            gym.register(
-                id="Hockey-One-v0",
-                entry_point="hockey_env:HockeyEnv_BasicOpponent",
-                kwargs={
-                    "mode": Mode[self.args.hockey_mode.upper()].value if isinstance(self.args.hockey_mode, str) else self.args.hockey_mode,
-                    "weak_opponent": self.args.opponent_type.lower() in ["weak_basic", "weak"],
-                    "keep_mode": self.args.keep_mode
-                },
-            )
-        except gym.error.Error:
-            print("Hockey environments are already registered.")
 
     def setup_environment(self):
         """Initialize the environment and set random seeds"""
-        if self.args.env_name.startswith("Hockey"):
-            # Convert mode correctly
-            mode = Mode.NORMAL  # Default
-            if hasattr(self.args, 'hockey_mode'):
-                if isinstance(self.args.hockey_mode, str):
-                    mode = Mode[self.args.hockey_mode.upper()]
-                elif isinstance(self.args.hockey_mode, int):
-                    mode = Mode(self.args.hockey_mode)
-
-            weak_opponent = self.args.opponent_type.lower() in ["weak_basic", "weak"]
-            keep_mode = getattr(self.args, "keep_mode", True)
-
-            self.env = gym.make(self.args.env_name, mode=mode.value, weak_opponent=weak_opponent, keep_mode=keep_mode)
-
-        elif self.args.env_name == "LunarLander-v2":
+        if self.args.env_name == "LunarLander-v3":
             self.env = gym.make(self.args.env_name, continuous=True)
-
         else:
             self.env = gym.make(self.args.env_name)
 
@@ -80,12 +43,15 @@ class Trainer:
     
     def setup_agent(self):
         """Initialize the SAC agent"""
-        critic_loss_fn = select_loss_function(self.args.loss_type)
+        hidden_actor = list(map(int, self.args.hidden_sizes_actor.split(",")))
+        hidden_critic = list(map(int, self.args.hidden_sizes_critic.split(",")))
+        learn_alpha_bool = self.args.learn_alpha.lower() == "true"
 
         self.agent = SACAgent(
-            self.env.observation_space,
-            self.env.action_space,
-            critic_loss_fn,
+            observation_space=self.env.observation_space,
+            action_space=self.env.action_space,
+            discount=self.args.discount,
+            buffer_size=self.args.buffer_size,
             learning_rate_actor=self.args.lr,
             learning_rate_critic=self.args.lr,
             update_every=self.args.update_every,
@@ -103,9 +69,20 @@ class Trainer:
                 "beta": self.args.noise_beta,
                 "seq_len": self.args.noise_seq_len,
             },
+            batch_size=self.args.batch_size,
+            hidden_sizes_actor=hidden_actor,
+            hidden_sizes_critic=hidden_critic,
+            tau=self.args.tau,
+            learn_alpha=learn_alpha_bool,
+            alpha=self.args.alpha,
+            control_half=False   # True by default for hockey environment
         )
 
     def get_run_name(self):
+        if self.args.name != "SAC":
+            # append id
+            return str(self.args.id) + "_" + self.args.name
+        
         """Generate a descriptive run name based on hyperparameters"""
         components = [
             f"{self.args.id}",  # Add PID for uniqueness
@@ -120,10 +97,6 @@ class Trainer:
         if self.args.use_ere:
             components.append(f"ERE-eta:{self.args.ere_eta0}")
 
-        # Add loss type if it's not the default
-        if self.args.loss_type != "mse":
-            components.append(f"loss:{self.args.loss_type}")
-
         # Add timestamp at the end
         timestamp = datetime.now().strftime("%d.%m.%Y._%H:%M")
         components.append(timestamp)
@@ -131,30 +104,22 @@ class Trainer:
         return "_".join(components)
 
     def setup_logging(self):
-        """Setup logging directories and files"""
         self.run_name = self.get_run_name()
         self.output_dir = Path(self.args.output_dir) / self.run_name
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        
         self.log_file = self.output_dir / "training-log.txt"
         with open(self.log_file, "w") as f:
             f.write(f"Training started at {datetime.now()}\n")
             f.write(f"PID: {self.args.id}\n")
             f.write("-" * 50 + "\n")
-            
-        # Save configuration
         with open(self.output_dir / "config.json", "w") as f:
             json.dump(vars(self.args), f, indent=4)
-
-        # Initialize metrics
+        # Initialize metrics.
         self.rewards = []
         self.lengths = []
         self.losses = []
         self.timestep = 0
-
-        # Create a summary file with hyperparameters
         self.create_summary_file()
-
         np.savez(
             self.output_dir / "rewards.npz",
             rewards=np.array([]),
@@ -163,50 +128,56 @@ class Trainer:
             config=json.dumps(vars(self.args)),
         )
 
-    def create_summary_file(self):
-        """Create a human-readable summary of the experiment"""
+    def create_summary_file(self):        
         summary = [
             "Experiment Summary",
             "=" * 50,
             "\nEnvironment Configuration:",
-            f"Environment: {self.args.env_name}",
-            f"Max Episodes: {self.args.max_episodes}",
-            f"Max Timesteps per Episode: {self.args.max_timesteps}",
+            f"  Run Name: {self.run_name}",
+            f"  Environment: {self.args.env_name}",
+            f"  Max Episodes: {self.args.max_episodes}",
+            f"  Max Timesteps per Episode: {self.args.max_timesteps}",
+            f"  Reward Type: {self.args.reward}",
             "\nTraining Configuration:",
-            f"Learning Rate: {self.args.lr}",
-            f"Loss Type: {self.args.loss_type}",
-            f"Target Network Update Frequency: {self.args.update_every}",
-            f"Random Seed: {self.args.seed}",
-            f"Discount Factor: {self.args.discount}",
-            f"Replay Buffer Size: {self.args.buffer_size}",
+            f"  Learning Rate: {self.args.lr}",
+            f"  Update Frequency: {self.args.update_every}",
+            f"  Random Seed: {self.args.seed}",
+            f"  Discount Factor: {self.args.discount}",
+            f"  Replay Buffer Size: {self.args.buffer_size}",
+            f"  Batch Size: {self.args.batch_size}",
+            f"  Actor Hidden Layers: {self.args.hidden_sizes_actor}",
+            f"  Critic Hidden Layers: {self.args.hidden_sizes_critic}",
+            f"  Tau: {self.args.tau}",
+            f"  Alpha: {self.args.alpha}",
+            f"  Learn Alpha?: {self.args.learn_alpha}",
+            f"  Keep Mode?: {self.args.keep_mode}",
             "\nPER Configuration:",
-            f"Enabled: {self.args.use_per}",
-            f"Alpha: {self.args.per_alpha}",
-            f"Beta: {self.args.per_beta}",
+            f"  Enabled: {self.args.use_per}",
+            f"  PER Alpha: {self.args.per_alpha}",
+            f"  PER Beta: {self.args.per_beta}",
             "\nERE Configuration:",
-            f"Enabled: {self.args.use_ere}",
-            f"Eta0: {self.args.ere_eta0}",
-            f"Min Size: {self.args.ere_min_size}",
+            f"  Enabled: {self.args.use_ere}",
+            f"  ERE Eta0: {self.args.ere_eta0}",
+            f"  ERE Min Size: {self.args.ere_min_size}",
             "\nNoise Configuration:",
-            f"Type: {self.args.noise_type}",
-            f"Sigma: {self.args.noise_sigma}",
-            f"Theta: {self.args.noise_theta}" if self.args.noise_type == "ornstein" else "",
-            f"dt: {self.args.noise_dt}" if self.args.noise_type == "ornstein" else "",
-            f"Beta: {self.args.noise_beta}" if self.args.noise_type == "colored" else "",
-            f"Sequence Length: {self.args.noise_seq_len}" if self.args.noise_type in ["colored", "pink"] else "",
+            f"  Noise Type: {self.args.noise_type}",
+            f"  Noise Sigma: {self.args.noise_sigma}",
+            f"  Noise Theta: {self.args.noise_theta}" if self.args.noise_type == "ornstein" else "",
+            f"  Noise dt: {self.args.noise_dt}" if self.args.noise_type == "ornstein" else "",
+            f"  Noise Beta: {self.args.noise_beta}" if self.args.noise_type == "colored" else "",
+            f"  Noise Seq Len: {self.args.noise_seq_len}" if self.args.noise_type in ["colored", "pink"] else "",
             "\nLogging Configuration:",
-            f"Output Directory: {self.args.output_dir}",
-            f"Save Interval: {self.args.save_interval}",
-            f"Log Interval: {self.args.log_interval}",
+            f"  Output Directory: {self.args.output_dir}",
+            f"  Save Interval: {self.args.save_interval}",
+            f"  Log Interval: {self.args.log_interval}",
             "\nRun Name:",
-            self.run_name,
+            f"  {self.run_name}",
         ]
-
-        # Filter out empty strings
-        summary = [s for s in summary if s != ""]
-
+        # Filter out any empty strings that may result from conditional lines.
+        summary = [s for s in summary if s.strip()]
         with open(self.output_dir / "experiment_summary.txt", "w") as f:
             f.write("\n".join(summary))
+
 
     def save_checkpoint(self, episode):
         """Save model checkpoint and statistics"""
@@ -339,46 +310,55 @@ class Trainer:
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="SAC trainer")
-    parser.add_argument("--name", type=str, default="SAC", help="Experiment name")
-    parser.add_argument("--env_name", type=str, default="Pendulum-v1", help="Environment name")
-    parser.add_argument("--seed", type=int, default=None, help="Random seed")
-    parser.add_argument("--max_episodes", type=int, default=2000, help="Maximum number of episodes")
-    parser.add_argument("--max_timesteps", type=int, default=2000, help="Maximum timesteps per episode")
-    parser.add_argument("--lr", type=float, default=0.0001, help="Learning rate")
-    parser.add_argument("--loss_type", type=str, default="mse", help="Loss function type")
-    parser.add_argument("--update_every", type=float, default=1, help="Target network update frequency")
-    parser.add_argument("--discount", type=float, default=0.99, help="Discount factor")
-    parser.add_argument("--buffer_size", type=int, default=1000000, help="Replay buffer size")
-    parser.add_argument("--id", type=int, default=os.getpid(), help="Process ID")
-    
-    # PER and ERE parameters
-    parser.add_argument("--use_per", action="store_true", help="Use Prioritized Experience Replay", default=False)
-    parser.add_argument("--use_ere", action="store_true", help="Use Emphasizing Recent Experience", default=False)
-    parser.add_argument("--per_alpha", type=float, default=0.6, help="PER alpha parameter")
-    parser.add_argument("--per_beta", type=float, default=0.4, help="PER beta parameter")
-    parser.add_argument("--ere_eta0", type=float, default=0.996, help="ERE initial eta parameter")
-    parser.add_argument("--ere_min_size", type=int, default=2500, help="ERE minimum buffer size")
-
-    # Logging parameters
-    parser.add_argument("--output_dir", type=str, default="./results", help="Output directory")
-    parser.add_argument("--save_interval", type=int, default=500, help="Save checkpoint interval")
-    parser.add_argument("--log_interval", type=int, default=20, help="Logging interval")
-
-    # noise parameters
-    parser.add_argument("--noise_type", type=str, default="normal", help="Noise type")
-    parser.add_argument("--noise_sigma", type=float, default=0.1, help="Noise sigma")
-    parser.add_argument("--noise_theta", type=float, default=0.15, help="Noise theta")
-    parser.add_argument("--noise_dt", type=float, default=0.01, help="Noise dt")
-    parser.add_argument("--noise_beta", type=float, default=1.0, help="Noise beta")
-    parser.add_argument("--noise_seq_len", type=int, default=1000, help="Noise sequence length")
-    
-    # Hockey environment parameters
-    parser.add_argument("--hockey_mode", type=str, default="NORMAL", help="Game mode: NORMAL, TRAIN_SHOOTING, TRAIN_DEFENSE")
-    parser.add_argument("--opponent_type", type=str, default="none", help="Opponent type: none, weak_basic")
-    parser.add_argument("--keep_mode", action="store_true", help="Enable puck keeping mode")
-
+    parser = argparse.ArgumentParser(
+        description="SAC trainer with advanced hyperparameters, Opponent Play & Win Ratio Eval"
+    )
+    parser.add_argument("--name", type=str, default="SAC")
+    parser.add_argument("--env_name", type=str, default="Pendulum-v1")
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--max_episodes", type=int, default=2000)
+    parser.add_argument("--max_timesteps", type=int, default=2000)
+    parser.add_argument("--lr", type=float, default=0.0001)
+    parser.add_argument("--loss_type", type=str, default="mse")
+    parser.add_argument("--update_every", type=float, default=1)
+    parser.add_argument("--discount", type=float, default=0.99)
+    parser.add_argument("--buffer_size", type=int, default=1000000)
+    parser.add_argument("--id", type=int, default=os.getpid())
+    # PER / ERE
+    parser.add_argument("--use_per", action="store_true", default=False)
+    parser.add_argument("--use_ere", action="store_true", default=False)
+    parser.add_argument("--per_alpha", type=float, default=0.6)
+    parser.add_argument("--per_beta", type=float, default=0.4)
+    parser.add_argument("--ere_eta0", type=float, default=0.996)
+    parser.add_argument("--ere_min_size", type=int, default=2500)
+    # Logging
+    parser.add_argument("--output_dir", type=str, default="./results")
+    parser.add_argument("--save_interval", type=int, default=500)
+    parser.add_argument("--log_interval", type=int, default=20)
+    # Noise
+    parser.add_argument("--noise_type", type=str, default="normal")
+    parser.add_argument("--noise_sigma", type=float, default=0.1)
+    parser.add_argument("--noise_theta", type=float, default=0.15)
+    parser.add_argument("--noise_dt", type=float, default=0.01)
+    parser.add_argument("--noise_beta", type=float, default=1.0)
+    parser.add_argument("--noise_seq_len", type=int, default=1000)
+    # Hockey-specific
+    parser.add_argument("--hockey_mode", type=str, default="NORMAL")
+    parser.add_argument("--opponent_type", type=str, default="none")  # Options: "none", "weak"/"weak_basic", or "strong"
+    parser.add_argument("--keep_mode", action="store_true", default=False)
+    # Evaluation
+    parser.add_argument("--eval_interval", type=int, default=2000, help="Eval every N episodes (0=disable)")
+    parser.add_argument("--eval_episodes", type=int, default=1000, help="Number of episodes for eval")
+    # Advanced hyperparameters
+    parser.add_argument("--batch_size", type=int, default=256, help="Batch size for SAC updates")
+    parser.add_argument("--hidden_sizes_actor", type=str, default="256,256", help="Comma-separated hidden layer sizes")
+    parser.add_argument("--hidden_sizes_critic", type=str, default="256,256", help="Comma-separated hidden layer sizes for critic")
+    parser.add_argument("--tau", type=float, default=0.005, help="Polyak averaging coefficient")
+    parser.add_argument("--learn_alpha", type=str, default="true", help="True or False, whether to learn temperature")
+    parser.add_argument("--alpha", type=float, default=0.2, help="Initial or fixed alpha")
+    parser.add_argument("--reward", type=str, default="basic", help="Reward type: basic, middle, advanced")
     return parser.parse_args()
+
 
 def main():
     args = parse_args()

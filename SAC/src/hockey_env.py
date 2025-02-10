@@ -164,6 +164,7 @@ class HockeyEnv(gym.Env, EzPickle):
         keep_mode: bool = True,
         mode: int | str | Mode = Mode.NORMAL,
         verbose: bool = False,
+        reward: str = "basic",
     ):
         """
         Build and environment instance
@@ -237,6 +238,11 @@ class HockeyEnv(gym.Env, EzPickle):
         self.discrete_action_space = spaces.Discrete(7)
 
         self.verbose = verbose
+        
+        valid_rewards = {"basic", "middle", "advanced", "01", "02", "03"}
+        if reward not in valid_rewards:
+            raise ValueError(f"reward must be one of {valid_rewards}, got {reward}")
+        self.reward = reward
 
         self.reset(self.one_starts)
 
@@ -275,6 +281,63 @@ class HockeyEnv(gym.Env, EzPickle):
     def r_uniform(self, mini, maxi):
         return self.np_random.uniform(mini, maxi, 1)[0]
 
+
+    # ------------------ SYMMETRY HELPER METHODS ------------------
+    # These methods implement a horizontal mirroring transformation.
+    # Because the game is symmetric with respect to the horizontal axis,
+    # a state observed above the center (with a given y component, angle, etc.)
+    # has an equivalent mirror image below the center if we flip the sign
+    # of the y–related components. Similarly, an action that moves the agent
+    # upward (positive y) should be mirrored by an action that moves downward
+    # (negative y) when the state is mirrored.
+    #
+    # Note: For a state vector (of 18 dims), we assume the following layout:
+    #   Player 1: indices 0: x, 1: y, 2: angle, 3: x vel, 4: y vel, 5: ang vel
+    #   Player 2: indices 6: x, 7: y, 8: angle, 9: x vel, 10: y vel, 11: ang vel
+    #   Puck: indices 12: x, 13: y, 14: x vel, 15: y vel
+    #   Keep mode flags: indices 16 and 17 (unchanged)
+    #
+    # For an action vector (8 dims: 4 for each agent):
+    #   Agent: indices 0: x change, 1: y change, 2: angle change, 3: shoot (unchanged)
+    #
+
+    def mirror_state(self, state: np.ndarray) -> np.ndarray:
+        mirrored = state.copy()
+
+        # Player 1: flip y position, y velocity, angle, and angular velocity
+        mirrored[1] = -mirrored[1]    # y position
+        mirrored[4] = -mirrored[4]    # y velocity
+        mirrored[2] = -mirrored[2]    # angle
+        mirrored[5] = -mirrored[5]    # angular velocity
+
+        # Player 2: indices 7, 10, 8, 11
+        mirrored[7] = -mirrored[7]
+        mirrored[10] = -mirrored[10]
+        mirrored[8] = -mirrored[8]
+        mirrored[11] = -mirrored[11]
+
+        # Puck: flip y position and y velocity (indices 13 and 15)
+        mirrored[13] = -mirrored[13]
+        mirrored[15] = -mirrored[15]
+
+        # Keep mode flags (indices 16, 17) remain unchanged
+        return mirrored
+
+
+    def mirror_action(self, action: np.ndarray) -> np.ndarray:
+        # Here we assume the action vector is of size 8:
+
+        # For each agent: [x change, y change, angle change, shoot]
+        mirrored = action.copy()
+        # For agent 1 (indices 0-3): flip y change (index 1) and angle change (index 2)
+        mirrored[1] = -mirrored[1]
+        mirrored[2] = -mirrored[2]
+        # For agent 2 (indices 4-7): flip y change (index 5) and angle change (index 6)
+        mirrored[5] = -mirrored[5]
+        mirrored[6] = -mirrored[6]
+        # The "shoot" commands (indices 3 and 7) remain unchanged
+        return mirrored
+    
     def _create_player(self, position, color, is_player_two):
         player = self.world.CreateDynamicBody(
             position=position,
@@ -759,33 +822,180 @@ class HockeyEnv(gym.Env, EzPickle):
                 r -= 10
         return float(r)
 
-    def get_reward(self, info: Dict[str, Any]):
-        """extract reward from info dict
-        function that computes the reward returned to the agent, here with some reward shaping
-        the shaping should probably be removed in future versions
-
-        Args:
-            info (Dict[str, Any]): info dict with key: "reward_closeness_to_puck"
-
-        Returns:
-            float: reward signal
-        """
+    def _get_reward_basic(self, info: Dict[str, Any]) -> float:
+        """Exactly your existing 'basic' reward shaping or minimal shaping."""
         r = self._compute_reward()
-        r += info["reward_closeness_to_puck"]
+        r += info["reward_closeness_to_puck"]  # or your existing proxy terms
         return float(r)
 
-    def get_reward_agent_two(self, info_two: Dict[str, Any]):
-        """extract reward from info dict for agent two
-
-        Args:
-            info (Dict[str, Any]): info dict with key: "reward_closeness_to_puck"
-
-        Returns:
-            float: reward signal
-        """
+    def _get_reward_basic_two(self, info_two: Dict[str, Any]) -> float:
+        """Basic reward for agent two (mirrored)."""
+        # Typically you do -_compute_reward() for agent2, or your existing logic.
         r = -self._compute_reward()
         r += info_two["reward_closeness_to_puck"]
         return float(r)
+    
+    def _get_reward_01(self, info):
+        return (
+        info["reward_closeness_to_puck"] * 0.5 +
+        info["reward_touch_puck"] * 2.0 +
+        info["reward_puck_direction"] * 1.0 +
+        self._compute_reward()
+    )
+    
+    def _get_reward_01_two(self, info_two):
+        r = -self._compute_reward()
+        r += info_two["reward_closeness_to_puck"] * 0.5
+        r += info_two["reward_touch_puck"] * 2.0
+        r += info_two["reward_puck_direction"] * 1.0
+        return r
+        
+    def _get_reward_02(self, info: Dict[str, Any]) -> float:
+        """
+        A more nuanced reward for player one.
+        
+        Combines:
+          - Win/loss signal (from _compute_reward)
+          - Closeness to puck (penalty if far away)
+          - Bonus for touching the puck
+          - Bonus for the puck moving in the correct (attacking) direction
+          - Bonus for making progress toward the opponent's goal
+        
+        Note: CENTER_X and W are defined globally.
+        """
+        base = self._compute_reward()
+        closeness = info["reward_closeness_to_puck"]
+        touch = info["reward_touch_puck"]
+        direction = info["reward_puck_direction"]
+        # For player one, the further right the puck is (i.e. its x > CENTER_X), the more progress.
+        puck_progress = max(0, (self.puck.position[0] - CENTER_X) / (W/2))
+        # Combine with chosen weights:
+        reward = base + 0.3 * closeness + 3.0 * touch + 1.5 * direction + 2.0 * puck_progress
+        return float(reward)
+
+    def _get_reward_02_two(self, info_two: Dict[str, Any]) -> float:
+        """
+        A symmetric reward for player two.
+        
+        It mirrors the logic for player one:
+          - Uses the mirrored win/loss signal (-_compute_reward())
+          - Uses the mirrored closeness, touch, and direction rewards from info_two
+          - Rewards progress if the puck is moving toward player two's goal 
+            (i.e. its x < CENTER_X)
+        """
+        base = -self._compute_reward()  # mirror the win/loss signal
+        closeness = info_two["reward_closeness_to_puck"]
+        touch = info_two["reward_touch_puck"]
+        direction = info_two["reward_puck_direction"]
+        # For player two, we reward when the puck has moved left of center.
+        puck_progress = max(0, (CENTER_X - self.puck.position[0]) / (W/2))
+        reward = base + 0.3 * closeness + 3.0 * touch + 1.5 * direction + 2.0 * puck_progress
+        return float(reward)
+
+    def _get_reward_middle(self, info: Dict[str, Any]) -> float:
+        pass  # implement this!
+
+    def _get_reward_middle_two(self, info_two: Dict[str, Any]) -> float:
+        pass  # implement this!
+
+    # --------------------------------------------------------------
+    # 3) ADVANCED REWARD
+    #    
+    # --------------------------------------------------------------
+    def _get_reward_advanced(self, info: Dict[str, Any]) -> float:
+        pass  # implement this!
+
+    def _get_reward_advanced_two(self, info_two: Dict[str, Any]) -> float:
+        pass  # implement this!
+    
+    def _get_reward_03(self, info: Dict[str, Any]) -> float:
+        """
+        A more nuanced reward for player one that augments the basic reward as follows:
+        
+         A) env_reward: the base reward (e.g. win/loss)
+         B) A bonus proportional to how close the agent is to the puck.
+         C) A small per-step penalty if the agent does not touch the puck.
+         D) A bonus if the agent touches the puck for the first time, scaled by how early the touch occurs.
+         E) A bonus for the puck moving in the desired direction.
+        
+        The timing bonus is computed as (max_timesteps - current_step) so that an early touch yields
+        a higher bonus.
+        """
+        base = self._compute_reward()  # (A)
+        closeness = info["reward_closeness_to_puck"]  # (B)
+        touched = info["reward_touch_puck"]  # 1.0 if touched; 0 otherwise
+        direction = info["reward_puck_direction"]  # bonus if moving in the right direction
+        
+        # (D): Bonus if the puck is touched for the first time.
+        # (max_timesteps - self.time) is larger if the touch occurs early.
+        timing_bonus = touched * (self.max_timesteps - self.time)
+        
+        # Combine with chosen weights:
+        reward = (base
+                  + 4.0 * closeness
+                  - 0.02 * (1 - touched)
+                  + 0.15 * timing_bonus
+                  + 1.0 * direction)
+        return float(reward)
+
+    def _get_reward_03_two(self, info_two: Dict[str, Any]) -> float:
+        """
+        A symmetric reward for player two.
+        
+        The idea is the same as for player one except that:
+          - The base reward is mirrored (i.e. negative of _compute_reward())
+          - The directional bonus should be appropriate for player two.
+        """
+        base = -self._compute_reward()  # mirror win/loss signal
+        closeness = info_two["reward_closeness_to_puck"]
+        touched = info_two["reward_touch_puck"]
+        direction = info_two["reward_puck_direction"]
+        
+        timing_bonus = touched * (self.max_timesteps - self.time)
+        
+        reward = (base
+                  + 4.0 * closeness
+                  - 0.02 * (1 - touched)
+                  + 0.15 * timing_bonus
+                  + 1.0 * direction)
+        return float(reward)
+    
+    def get_reward(self, info: Dict[str, Any]) -> float:
+        """Return the reward for player one (the 'main' agent)."""
+        if self.reward == "basic":
+            return self._get_reward_basic(info)
+        elif self.reward == "middle":
+            return self._get_reward_middle(info)
+        elif self.reward == "advanced":
+            return self._get_reward_advanced(info)
+        elif self.reward == "01":
+            return self._get_reward_01(info)
+        elif self.reward == "02":
+            return self._get_reward_02(info)
+        elif self.reward == "03":
+            return self._get_reward_03(info)
+        else:
+            # Should not happen if we validated reward in constructor
+            return 0.0
+
+    def get_reward_agent_two(self, info_two: Dict[str, Any]) -> float:
+        """Return the reward for player two (mirrored)."""
+        # You can give symmetrical logic here, or handle differently.
+        # We'll do the same pattern: basic, middle, advanced.
+        if self.reward == "basic":
+            return self._get_reward_basic_two(info_two)
+        elif self.reward == "middle":
+            return self._get_reward_middle_two(info_two)
+        elif self.reward == "advanced":
+            return self._get_reward_advanced_two(info_two)
+        elif self.reward == "01":
+            return self._get_reward_01_two(info_two)
+        elif self.reward == "02":
+            return self._get_reward_02_two(info_two)
+        elif self.reward == "03":
+            return self._get_reward_03_two(info_two)
+        else:
+            return 0.0
 
     def _get_info(self):
         # different proxy rewards:
@@ -1180,7 +1390,7 @@ class BasicOpponent:
 
 
 class HumanOpponent:
-    def __init__(self, env, player=1):
+    def __init__(self, env, player=1, reward = "basic"):
         import pygame
 
         self.env = env

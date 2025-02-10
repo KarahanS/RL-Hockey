@@ -15,27 +15,6 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.set_num_threads(1)
 
 
-def select_loss_function(loss_type):
-    """
-    Select and return the appropriate loss function based on the input string.
-
-    Args:
-        loss_type (str): Type of loss function to use
-
-    Returns:
-        callable: Loss function to be used for critic training
-    """
-    loss_functions = {
-        "mse": F.mse_loss,
-        "huber": F.smooth_l1_loss,
-        "mae": F.l1_loss,
-        "mse_weighted": lambda input, target: torch.mean(
-            F.mse_loss(input, target, reduction="none") * 1.0
-        ),
-    }
-
-    return loss_functions.get(loss_type.lower(), F.mse_loss)
-
 
 class UnsupportedSpace(Exception):
     """Exception raised when the Sensor or Action space are not compatible"""
@@ -47,7 +26,7 @@ class UnsupportedSpace(Exception):
 
 class SACAgent:
     def __init__(
-        self, observation_space, action_space, loss_fn=F.mse_loss, **userconfig
+        self, observation_space, action_space, **userconfig
     ):
         
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -59,9 +38,20 @@ class SACAgent:
             raise UnsupportedSpace("Action space {} incompatible ".format(action_space))
 
         self._observation_space = observation_space
-        self._action_space = action_space            
-        self._action_dim = action_space.shape[0]
-        self.critic_loss_fn = loss_fn
+        self._action_space = action_space   
+                 
+        self.control_half = userconfig.get("control_half", False)
+        full_action_dim = action_space.shape[0]
+        if self.control_half:
+            # Use only the first half of the action space
+            self._action_dim = full_action_dim // 2
+            # Create a new (sliced) action space for the actor network.
+            new_low = action_space.low[:self._action_dim]
+            new_high = action_space.high[:self._action_dim]
+            new_action_space = gym.spaces.Box(new_low, new_high, dtype=action_space.dtype)
+        else:
+            self._action_dim = full_action_dim
+            new_action_space = action_space
 
         # Default configuration
         self._config = {
@@ -108,7 +98,7 @@ class SACAgent:
             self._action_dim,
             self._config["hidden_sizes_actor"],
             self._config["learning_rate_actor"],
-            action_space=action_space,
+            action_space=new_action_space,
             device=device,
             epsilon=self._config["epsilon"],
             noise_config=self._config["noise"],
@@ -148,7 +138,7 @@ class SACAgent:
 
         # Initialize alpha (entropy temperature)
         if self._config["learn_alpha"]:
-            self.target_entropy = -np.prod(action_space.shape).astype(np.float32)
+            self.target_entropy = -np.prod(new_action_space.shape).astype(np.float32)
             self.log_alpha = torch.zeros(1, requires_grad=True, device=device)
             self.alpha = self.log_alpha.exp()
             self.alpha_optimizer = torch.optim.Adam(
@@ -214,7 +204,7 @@ class SACAgent:
     def store_transition(self, transition):
         self.buffer.add_transition(transition)
 
-    def train(self, iter_fit=32):
+    def train(self, iter_fit=32): # gradient update steps
         losses = []
 
         for k in range(iter_fit):
@@ -260,8 +250,8 @@ class SACAgent:
             td_error2 = q_backup.detach() - q2
 
             # Compute critic losses with importance sampling weights
-            critic1_loss = (td_error1.pow(2) * weights).mean()
-            critic2_loss = (td_error2.pow(2) * weights).mean()
+            critic1_loss = (td_error1.pow(2) * weights).mean()  # MSE
+            critic2_loss = (td_error2.pow(2) * weights).mean()  # MSE
 
             self.critic1.optimizer.zero_grad()
             critic1_loss.backward()
@@ -327,6 +317,29 @@ class SACAgent:
 
         return losses
 
+    def full_state(self):
+        state = {
+            "actor_state_dict": self.actor.state_dict(),
+            "critic1_state_dict": self.critic1.state_dict(),
+            "critic2_state_dict": self.critic2.state_dict(),
+            "actor_optimizer_state_dict": self.actor.optimizer.state_dict(),
+            "critic1_optimizer_state_dict": self.critic1.optimizer.state_dict(),
+            "critic2_optimizer_state_dict": self.critic2.optimizer.state_dict(),
+            "train_iter": self.train_iter,
+            "K": self.K,
+            "config": self._config,
+        }
+        if self._config.get("learn_alpha", False):
+            state["log_alpha"] = self.log_alpha.detach().cpu()
+            state["alpha_optimizer_state_dict"] = self.alpha_optimizer.state_dict()
+        # Save the noise state if available.
+        if hasattr(self.actor, "noise") and hasattr(self.actor.noise, "get_state"):
+            state["noise_state"] = self.actor.noise.get_state()
+        # Save replay buffer statistics if available.
+        if hasattr(self.buffer, "get_full_state"):
+            state["buffer_state"] = self.buffer.get_full_state()
+        return state
+    
     def state(self):
         return (
             self.actor.state_dict(),
@@ -340,3 +353,87 @@ class SACAgent:
         self.critic2.load_state_dict(state[2])
         self.critic1_target.load_state_dict(state[1])
         self.critic2_target.load_state_dict(state[2])
+
+    def restore_full_state(self, checkpoint):
+        """Restore as many of the saved elements as are present in the checkpoint."""
+        # 1. Model weights
+        actor_sd = checkpoint.get("actor_state_dict", None)
+        if actor_sd is not None:
+            self.actor.load_state_dict(actor_sd)
+        else:
+            print("[SACAgent] 'actor_state_dict' missing. Skipping actor load.")
+
+        critic1_sd = checkpoint.get("critic1_state_dict", None)
+        if critic1_sd is not None:
+            self.critic1.load_state_dict(critic1_sd)
+            self.critic1_target.load_state_dict(critic1_sd)
+        else:
+            print("[SACAgent] 'critic1_state_dict' missing. Skipping critic1 load.")
+
+        critic2_sd = checkpoint.get("critic2_state_dict", None)
+        if critic2_sd is not None:
+            self.critic2.load_state_dict(critic2_sd)
+            self.critic2_target.load_state_dict(critic2_sd)
+        else:
+            print("[SACAgent] 'critic2_state_dict' missing. Skipping critic2 load.")
+
+        # 2. Optimizer states
+        actor_opt_sd = checkpoint.get("actor_optimizer_state_dict", None)
+        if actor_opt_sd is not None:
+            self.actor.optimizer.load_state_dict(actor_opt_sd)
+        else:
+            print("[SACAgent] 'actor_optimizer_state_dict' missing. Skipping actor optimizer load.")
+
+        critic1_opt_sd = checkpoint.get("critic1_optimizer_state_dict", None)
+        if critic1_opt_sd is not None:
+            self.critic1.optimizer.load_state_dict(critic1_opt_sd)
+        else:
+            print("[SACAgent] 'critic1_optimizer_state_dict' missing. Skipping critic1 optimizer load.")
+
+        critic2_opt_sd = checkpoint.get("critic2_optimizer_state_dict", None)
+        if critic2_opt_sd is not None:
+            self.critic2.optimizer.load_state_dict(critic2_opt_sd)
+        else:
+            print("[SACAgent] 'critic2_optimizer_state_dict' missing. Skipping critic2 optimizer load.")
+
+        # 3. Misc fields
+        self.train_iter = checkpoint.get("train_iter", self.train_iter)
+        self.K = checkpoint.get("K", self.K)
+
+        loaded_config = checkpoint.get("config", None)
+        if loaded_config is not None:
+            self._config = loaded_config
+        else:
+            print("[SACAgent] 'config' missing. Keeping current self._config.")
+
+        # 4. Alpha / temperature
+        if self._config.get("learn_alpha", False):
+            log_alpha_tensor = checkpoint.get("log_alpha", None)
+            alpha_opt_sd = checkpoint.get("alpha_optimizer_state_dict", None)
+            if log_alpha_tensor is not None:
+                self.log_alpha.data.copy_(log_alpha_tensor)
+                self.alpha = self.log_alpha.exp()
+            else:
+                print("[SACAgent] 'log_alpha' missing. Skipping alpha load.")
+            if alpha_opt_sd is not None:
+                self.alpha_optimizer.load_state_dict(alpha_opt_sd)
+            else:
+                print("[SACAgent] 'alpha_optimizer_state_dict' missing. Skipping alpha optimizer load.")
+        else:
+            # If alpha is not learnable, just set self.alpha from config if user wants
+            pass
+
+        # 5. Noise state
+        noise_state = checkpoint.get("noise_state", None)
+        if noise_state is not None and hasattr(self.actor.noise, "set_state"):
+            self.actor.noise.set_state(noise_state)
+        else:
+            print("[SACAgent] 'noise_state' missing or noise has no set_state().")
+
+        # 6. Replay buffer state
+        buffer_state = checkpoint.get("buffer_state", None)
+        if buffer_state is not None and hasattr(self.buffer, "set_state"):
+            self.buffer.set_state(buffer_state)
+        else:
+            print("[SACAgent] 'buffer_state' missing or buffer has no set_state().")
+

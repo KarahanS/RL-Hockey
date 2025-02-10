@@ -51,6 +51,14 @@ class NormalActionNoise(ActionNoise):
     def __repr__(self) -> str:
         return f"NormalActionNoise(mu={self._mu}, sigma={self._sigma})"
 
+    def get_state(self):
+        """Return the current internal state."""
+        return {}
+
+    def set_state(self, state):
+        """Restore the internal state. If missing, reset to default."""
+        pass
+
 
 class OrnsteinUhlenbeckActionNoise(ActionNoise):
     """
@@ -103,6 +111,17 @@ class OrnsteinUhlenbeckActionNoise(ActionNoise):
     def __repr__(self) -> str:
         return f"OrnsteinUhlenbeckActionNoise(mu={self._mu}, sigma={self._sigma})"
 
+    def get_state(self):
+            """Return the current internal state."""
+            return {"noise_prev": self.noise_prev.copy()}
+
+    def set_state(self, state):
+        """Restore the internal state. If missing, reset to default."""
+        try:
+            self.noise_prev = state["noise_prev"].copy()
+        except KeyError:
+            print("Warning: OrnsteinUhlenbeckActionNoise state missing. Resetting noise.")
+            self.reset()
 
 class ColoredActionNoise(ActionNoise):
     def __init__(self, beta, sigma, seq_len, action_dim=None, rng=None):
@@ -161,6 +180,25 @@ class ColoredActionNoise(ActionNoise):
 
     def __repr__(self) -> str:
         return f"ColoredActionNoise(beta={self.beta}, sigma={self.sigma})"
+    
+    def get_state(self):
+            """Return the internal state of the underlying noise process(es)."""
+            if np.isscalar(self.beta):
+                return self.gen.get_state()
+            else:
+                # When beta is not scalar, gen is a list of processes.
+                return [g.get_state() for g in self.gen]
+
+    def set_state(self, state):
+        """Restore the internal state of the underlying noise process(es)."""
+        if np.isscalar(self.beta):
+            self.gen.set_state(state)
+        else:
+            if isinstance(state, list) and len(state) == len(self.gen):
+                for g, s in zip(self.gen, state):
+                    g.set_state(s)
+            else:
+                print("Warning: ColoredActionNoise state format unexpected. Resetting noise.")
 
 
 class PinkActionNoise(ColoredActionNoise):
@@ -277,3 +315,16 @@ class ColoredNoiseProcess:
 
         ret = self.scale * np.concatenate(ret, axis=-1)
         return ret if n > 1 else ret[..., 0]
+    
+    def get_state(self):
+        """Return the current buffer and index state."""
+        return {"buffer": self.buffer.copy(), "idx": self.idx}
+
+    def set_state(self, state):
+        """Restore the internal state. If missing, reset."""
+        try:
+            self.buffer = state["buffer"].copy()
+            self.idx = state["idx"]
+        except KeyError:
+            print("Warning: ColoredNoiseProcess state missing. Resetting noise process.")
+            self.reset()

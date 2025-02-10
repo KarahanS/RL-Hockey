@@ -99,6 +99,24 @@ class SegmentTree(object):
         assert 0 <= idx < self._capacity
         return self._value[self._capacity + idx]
 
+    def get_state(self):
+        """Return the internal state as a dictionary."""
+        return {
+            "capacity": self._capacity,
+            "value": self._value.copy(),
+        }
+
+    def set_state(self, state):
+        """Restore the internal state from a dictionary."""
+        try:
+            self._capacity = state["capacity"]
+            self._value = state["value"].copy()
+        except KeyError as e:
+            print(f"Warning: Missing key in SegmentTree restore: {e}")
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}(capacity={self._capacity}, value={self._value})"
+
 
 class SumSegmentTree(SegmentTree):
     def __init__(self, capacity):
