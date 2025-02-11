@@ -4,7 +4,7 @@ Evaluation Script for Two Agents Playing Against Each Other
 
 This script loads a SACAgent instance for agent1 from its config and checkpoint.
 For agent2, it is possible to choose between:
-  - A trained SACAgent (by setting --opponent_type trained),
+  - A trained SACAgent (by setting --opponent_type sac),
   - A trained TD3 agent (by setting --opponent_type td3),
   - A weak BasicOpponent (by setting --opponent_type weak),
   - A strong BasicOpponent (by setting --opponent_type strong),
@@ -216,6 +216,7 @@ def evaluate_agents(agent1, agent2, env, eval_episodes=100, render=False):
     results = {"agent1_win": 0, "agent2_win": 0, "draw": 0}
     for episode in range(eval_episodes):
         obs, _ = env.reset()
+        opponent_obs = env.obs_agent_two() if hasattr(env, "obs_agent_two") else obs
         done = False
         while not done:
             # For agent1 (always SAC), we pass eval_mode=True.
@@ -224,16 +225,17 @@ def evaluate_agents(agent1, agent2, env, eval_episodes=100, render=False):
             # For agent2, we check if it's a TD3 agent (or anything else) and call appropriately.
             if isinstance(agent2, TD3):
                 # For TD3, disable noise during evaluation.
-                action2 = agent2.act(obs, add_noise=False)
+                action2 = agent2.act(opponent_obs, add_noise=False)
             else:
                 try:
-                    action2 = agent2.act(obs, eval_mode=True)
+                    action2 = agent2.act(opponent_obs, eval_mode=True)
                 except TypeError:
-                    action2 = agent2.act(obs)
+                    action2 = agent2.act(opponent_obs)
 
             # The full action is the concatenation of agent1 and agent2 actions.
             full_action = np.hstack([action1, action2])
             obs, reward, done, _, info = env.step(full_action)
+            opponent_obs = env.obs_agent_two() if hasattr(env, "obs_agent_two") else obs
             if render:
                 env.render("human")
                 time.sleep(1.0 / 50)
@@ -263,24 +265,24 @@ def parse_args():
         required=True,
         help="Path to the checkpoint for agent1 (SAC)",
     )
-    # These are used if the opponent is set to 'trained' (SAC) or 'td3'
+    # These are used if the opponent is set to 'sac' (SAC) or 'td3'
     parser.add_argument(
         "--agent2_config",
         type=str,
         default="",
-        help="Path to the JSON config for agent2 (used if opponent_type is 'trained' or 'td3')",
+        help="Path to the JSON config for agent2 (used if opponent_type is 'sac' or 'td3')",
     )
     parser.add_argument(
         "--agent2_checkpoint",
         type=str,
         default="",
-        help="Path to the checkpoint for agent2 (used if opponent_type is 'trained' or 'td3')",
+        help="Path to the checkpoint for agent2 (used if opponent_type is 'sac' or 'td3')",
     )
     parser.add_argument(
         "--opponent_type",
         type=str,
-        default="trained",
-        help="Type of opponent: trained, td3, weak, strong, none",
+        default="sac",
+        help="Type of opponent: sac, td3, weak, strong, none",
     )
     parser.add_argument(
         "--eval_episodes", type=int, default=100, help="Number of evaluation episodes"
@@ -310,10 +312,10 @@ def main():
 
     # For agent2, determine based on opponent_type.
     opponent_type = args.opponent_type.lower()
-    if opponent_type == "trained":
+    if opponent_type == "sac":
         if not args.agent2_config or not args.agent2_checkpoint:
             raise ValueError(
-                "For trained opponent, agent2_config and agent2_checkpoint must be provided."
+                "For sac opponent, agent2_config and agent2_checkpoint must be provided."
             )
         agent2 = load_sac_agent(args.agent2_config, args.agent2_checkpoint, env)
     elif opponent_type == "td3":
@@ -340,7 +342,7 @@ def main():
     agent1.actor.eval()
     agent1.critic1.eval()
     agent1.critic2.eval()
-    if opponent_type in ["trained", "td3"]:
+    if opponent_type in ["sac", "td3"]:
         try:
             agent2.actor.eval()
             agent2.critic1.eval()
@@ -372,10 +374,11 @@ def main():
             ha="center",
             va="bottom",
         )
-    plot_filename = f"evaluation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+    plot_filename = f"evaluation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    # save as pdf
     plt.savefig(plot_filename)
     plt.show()
-    print(f"Saved evaluation plot as {plot_filename}")
+    # print(f"Saved evaluation plot as {plot_filename}")
 
 
 if __name__ == "__main__":

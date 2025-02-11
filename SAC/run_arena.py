@@ -23,18 +23,17 @@ import sac_arena  # Ensure sac_arena.py is in your PYTHONPATH or in the same dir
 def main():
     # Define the variables you want to use.
     # For agent1 (SAC agent) you provide its config and checkpoint.
-    agent1_config = "-"  # For example, if config is embedded in the checkpoint.
-    agent1_checkpoint = "pth/reward01_alphalearn_per/reward01_final.pth"
+    agent1_config = "pth/alpha0/config.json"  # For example, if config is embedded in the checkpoint.
+    agent1_checkpoint = "pth/alpha0/alpha0_9000.pth"
 
     # For agent2, you can use either SAC or TD3.
     # If you choose TD3, make sure the config and checkpoint paths point to your TD3 files.
-    agent2_config = "pth/td3/config.json"  # Update this if using TD3.
-    agent2_checkpoint = (
-        "pth/td3/TD3_Hockey_vs_weak_seed_49_final.pth"  # Update this if using TD3.
-    )
+    agent2_config = "pth/alpha0/config.json"  # Update this if using TD3.
+    agent2_checkpoint = "pth/alpha0/alpha0_8500.pth"  # Update this if using TD3.
+    # "pth/td3_self_play/TD3_Hockey_self_play_seed_700_final.pth"
 
-    # Set opponent_type to one of: "trained", "td3", "weak", "strong", or "none"
-    opponent_type = "td3"  # Change to "td3" to use a TD3 opponent.
+    # Set opponent_type to one of: "sac", "td3", "weak", "strong", or "none"
+    opponent_type = "sac"  # Change to "td3" to use a TD3 opponent.
 
     eval_episodes = 10000  # Number of evaluation episodes
     env_mode = "NORMAL"  # Environment mode (e.g., NORMAL, TRAIN_SHOOTING, etc.)
