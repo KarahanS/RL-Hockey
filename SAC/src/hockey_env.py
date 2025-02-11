@@ -186,6 +186,9 @@ class HockeyEnv(gym.Env, EzPickle):
         self.keep_mode = keep_mode
         self.player1_has_puck = 0
         self.player2_has_puck = 0
+        
+        self.first_touch_done = False
+        self.first_touch_done_agent2 = False
 
         self.world = Box2D.b2World([0, 0])
         self.player1 = None
@@ -239,7 +242,8 @@ class HockeyEnv(gym.Env, EzPickle):
 
         self.verbose = verbose
         
-        valid_rewards = {"basic", "middle", "advanced", "01", "02", "03"}
+        valid_rewards = {"basic", "middle", "advanced", "01", "02", "03", "04", "05"}
+
         if reward not in valid_rewards:
             raise ValueError(f"reward must be one of {valid_rewards}, got {reward}")
         self.reward = reward
@@ -891,6 +895,110 @@ class HockeyEnv(gym.Env, EzPickle):
         puck_progress = max(0, (CENTER_X - self.puck.position[0]) / (W/2))
         reward = base + 0.3 * closeness + 3.0 * touch + 1.5 * direction + 2.0 * puck_progress
         return float(reward)
+    
+    def _get_reward_04(self, info: Dict[str, Any]) -> float:
+        """
+        Enhanced reward for player one with:
+        1. Progressive positioning bonus
+        2. Sustained possession bonus
+        3. Angle-aligned shot quality
+        4. Dynamic defensive positioning
+        5. Early touch incentive
+        """
+        base = self._compute_reward()
+        
+        # 1. Progressive positioning - normalized puck progress toward opponent goal
+        puck_progress = max(0.0, (self.puck.position[0] - CENTER_X) / (W/2 - CENTER_X))
+        
+        # 2. Sustained possession - bonus per step while controlling puck
+        sustained_possession = 0.1 * (self.player1_has_puck / MAX_TIME_KEEP_PUCK)
+        
+        # 3. Angle-aligned shot quality - combines speed and accuracy
+        shot_speed = self.puck.linearVelocity[0] / MAX_PUCK_SPEED  # Normalized
+        y_alignment = 1.0 - abs(self.puck.position[1] - CENTER_Y)/(H/2)  # 1=center
+        shot_quality = shot_speed * y_alignment
+        
+        # 4. Dynamic defensive positioning - reduce penalty if puck is moving away
+        defensive_penalty = info["reward_closeness_to_puck"]
+        if self.puck.linearVelocity[0] > 0:  # Puck moving toward opponent side
+            defensive_penalty *= 0.2  # Reduce penalty by 80%
+            
+        # 5. Early touch bonus - incentivize quick puck acquisition
+        early_touch = info["reward_touch_puck"] * (self.max_timesteps - self.time)/self.max_timesteps
+        
+        reward = (
+            base
+            + 2.0 * puck_progress
+            + sustained_possession
+            + 1.5 * shot_quality
+            + defensive_penalty
+            + 0.5 * early_touch
+            - 0.01  # Small constant penalty to encourage urgency
+        )
+        return float(reward)
+
+    def _get_reward_04_two(self, info_two: Dict[str, Any]) -> float:
+        """Mirrored version for player two"""
+        base = -self._compute_reward()
+        
+        puck_progress = max(0.0, (CENTER_X - self.puck.position[0]) / (W/2 - CENTER_X))
+        sustained_possession = 0.1 * (self.player2_has_puck / MAX_TIME_KEEP_PUCK)
+        shot_speed = -self.puck.linearVelocity[0] / MAX_PUCK_SPEED
+        y_alignment = 1.0 - abs(self.puck.position[1] - CENTER_Y)/(H/2)
+        shot_quality = shot_speed * y_alignment
+        defensive_penalty = info_two["reward_closeness_to_puck"]
+        if self.puck.linearVelocity[0] < 0:  # Puck moving toward player two's side
+            defensive_penalty *= 0.2
+        early_touch = info_two["reward_touch_puck"] * (self.max_timesteps - self.time)/self.max_timesteps
+        
+        reward = (
+            base
+            + 2.0 * puck_progress
+            + sustained_possession
+            + 1.5 * shot_quality
+            + defensive_penalty
+            + 0.5 * early_touch
+            - 0.01
+        )
+        return float(reward)
+        
+    def _get_reward_05(self, info: Dict[str, Any]) -> float:
+        """
+        Enhanced reward for player one with:
+        - Base win/loss reward.
+        - A bonus proportional to the puck closeness (scaled by 5).
+        - A small penalty if the puck is not touched.
+        - A one-time bonus at the first touch scaled by (max_timesteps - current_step).
+        """
+        base = self._compute_reward()
+        closeness = info["reward_closeness_to_puck"]
+        touched = info["reward_touch_puck"]  # Expected to be 1.0 if the puck is touched; 0 otherwise.
+        
+        bonus = 0.0
+        # If the puck is touched for the first time during this episode, add a bonus.
+        if (not self.first_touch_done) and (touched == 1.0):
+            bonus = 0.1 * (self.max_timesteps - self.time)
+            self.first_touch_done = True
+            
+        reward = base + 5.0 * closeness - (1 - touched) * 0.1 + bonus
+        return float(reward)
+
+
+    def _get_reward_05_two(self, info_two: Dict[str, Any]) -> float:
+        """
+        Mirrored enhanced reward for player two.
+        """
+        base = -self._compute_reward()  # Mirror the win/loss signal.
+        closeness = info_two["reward_closeness_to_puck"]
+        touched = info_two["reward_touch_puck"]
+        
+        bonus = 0.0
+        if (not self.first_touch_done_agent2) and (touched == 1.0):
+            bonus = 0.1 * (self.max_timesteps - self.time)
+            self.first_touch_done_agent2 = True
+            
+        reward = base + 5.0 * closeness - (1 - touched) * 0.1 + bonus
+        return float(reward)
 
     def _get_reward_middle(self, info: Dict[str, Any]) -> float:
         pass  # implement this!
@@ -974,14 +1082,16 @@ class HockeyEnv(gym.Env, EzPickle):
             return self._get_reward_02(info)
         elif self.reward == "03":
             return self._get_reward_03(info)
+        elif self.reward == "04":
+            return self._get_reward_04(info)
+        elif self.reward == "05":
+            return self._get_reward_05(info)
         else:
             # Should not happen if we validated reward in constructor
             return 0.0
 
     def get_reward_agent_two(self, info_two: Dict[str, Any]) -> float:
         """Return the reward for player two (mirrored)."""
-        # You can give symmetrical logic here, or handle differently.
-        # We'll do the same pattern: basic, middle, advanced.
         if self.reward == "basic":
             return self._get_reward_basic_two(info_two)
         elif self.reward == "middle":
@@ -994,6 +1104,10 @@ class HockeyEnv(gym.Env, EzPickle):
             return self._get_reward_02_two(info_two)
         elif self.reward == "03":
             return self._get_reward_03_two(info_two)
+        elif self.reward == "04":
+            return self._get_reward_04_two(info_two)
+        elif self.reward == "05":
+            return self._get_reward_05_two(info_two)
         else:
             return 0.0
 

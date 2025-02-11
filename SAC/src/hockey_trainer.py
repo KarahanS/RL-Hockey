@@ -17,6 +17,9 @@ import pickle
 from datetime import datetime
 from pathlib import Path
 import matplotlib.pyplot as plt
+import concurrent.futures
+import os
+
 
 from sac import SACAgent
 from hockey_env import HockeyEnv, BasicOpponent, Mode   # your hockey environment and basic opponent
@@ -389,28 +392,6 @@ class Trainer:
             plt.savefig(self.output_dir / "win_ratio.png")
             plt.close()
 
-    def evaluate_policy(self, eval_episodes=1000):
-        wins = 0
-        for _ in range(eval_episodes):
-            obs, _info = self.env.reset()
-            done = False
-            trunc = False
-            while not (done or trunc):
-                agent_action = self.agent.act(obs, eval_mode=True)
-                if self.opponent is not None:
-                    opponent_obs = self.env.obs_agent_two() if hasattr(self.env, "obs_agent_two") else obs
-                    opponent_action = self.opponent.act(opponent_obs)
-                    full_action = np.hstack([agent_action, opponent_action])
-                else:
-                    # If no opponent, just use the agent's action.
-                    opponent_action = np.array([0, 0, 0, 0], dtype=np.float32)
-                    full_action = np.hstack([agent_action, opponent_action])
-                    
-                obs, reward, done, trunc, info = self.env.step(full_action)
-            if "winner" in info and info["winner"] == 1:
-                wins += 1
-        return wins / eval_episodes
-
     def train(self):
         for episode in range(1, self.args.max_episodes + 1):
             self.agent.K = 0
@@ -459,8 +440,91 @@ class Trainer:
                     f.write(log_msg + "\n")
         self.save_checkpoint("final")
         self.plot_metrics()
-
-
+        
+        
+    def evaluate_policy(self, eval_episodes=1000):
+        """
+        Runs evaluation episodes in parallel and returns the win ratio.
+        (You can also return additional statistics such as average reward if desired.)
+        """
+        rewards = []
+        results = {'win': 0, 'loss': 0, 'draw': 0}
+        # Extract environment parameters from the training configuration.
+        env_params = {
+            'mode': self.env.mode,            # e.g., Mode.NORMAL
+            'keep_mode': self.args.keep_mode,  # same as used in training
+            'reward': self.args.reward         # reward type string
+        }
+        # Determine the maximum number of workers based on available CPUs.
+        max_workers = min(eval_episodes, os.cpu_count() or 1)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = []
+            # Optionally, if a seed is provided, vary it per episode.
+            base_seed = self.args.seed if self.args.seed is not None else 0
+            for i in range(eval_episodes):
+                seed = base_seed + i
+                futures.append(executor.submit(self._run_eval_episode, self.agent, self.opponent, env_params, seed))
+            for future in concurrent.futures.as_completed(futures):
+                episode_reward, winner = future.result()
+                rewards.append(episode_reward)
+                if winner == 1:
+                    results['win'] += 1
+                elif winner == -1:
+                    results['loss'] += 1
+                else:
+                    results['draw'] += 1
+        avg_reward = np.mean(rewards) if rewards else 0
+        total_games = results['win'] + results['loss'] + results['draw']
+        win_ratio = results['win'] / total_games if total_games > 0 else 0
+        print(f"[Parallel Eval] Win Ratio: {win_ratio:.3f}, Avg Reward: {avg_reward:.2f}")
+        return win_ratio
+    
+    def _run_eval_episode(agent, opponent, env_params, seed):
+        """
+        Run one evaluation episode in a fresh environment instance.
+        
+        Parameters:
+        - agent: The trained SACAgent.
+        - opponent: The opponent (or None).
+        - env_params: A dictionary containing keys 'mode', 'keep_mode', and 'reward'
+                        to instantiate a fresh HockeyEnv.
+        - seed: Optional seed for the environment.
+        
+        Returns:
+        A tuple (episode_reward, winner) where winner is 1 (agent win), -1 (agent loss), or 0 (draw).
+        """
+        from hockey_env import HockeyEnv  # ensure fresh import
+        # Create a fresh environment instance using the same parameters.
+        env = HockeyEnv(mode=env_params['mode'], keep_mode=env_params['keep_mode'], reward=env_params['reward'])
+        if seed is not None:
+            env.set_seed(seed)
+        obs, _ = env.reset()
+        total_reward = 0.0
+        done = False
+        trunc = False
+        # Run the episode
+        while not (done or trunc):
+            # Get action from agent.
+            agent_action = agent.act(obs, eval_mode=True)
+            if opponent is not None:
+                # Use opponent’s observation if available.
+                if hasattr(env, "obs_agent_two"):
+                    opponent_obs = env.obs_agent_two()
+                else:
+                    opponent_obs = obs
+                opponent_action = opponent.act(opponent_obs)
+                full_action = np.hstack([agent_action, opponent_action])
+            else:
+                # If no opponent, use zeros for the second half of the action.
+                zeros = np.zeros(env.action_space.shape[0] // 2, dtype=np.float32)
+                full_action = np.hstack([agent_action, zeros])
+            obs, reward, done, trunc, info = env.step(full_action)
+            total_reward += reward
+        env.close()
+        # The winner is assumed to be stored in info under key "winner"
+        winner = info.get("winner", 0)
+        return total_reward, winner
+    
 # =============================================================================
 # Command-Line Argument Parsing and Main
 # =============================================================================

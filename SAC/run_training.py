@@ -28,7 +28,6 @@ SEED = config.get("seed", 42)
 LR = config.get("lr", 0.0001)
 MAX_EPISODES = config.get("max_episodes", 2000)
 MAX_TIMESTEPS = config.get("max_timesteps", 2000)
-LOSS_TYPE = config.get("loss_type", "mse")
 UPDATE_EVERY = config.get("update_every", 1)
 SAVE_INTERVAL = config.get("save_interval", 500)
 LOG_INTERVAL = config.get("log_interval", 20)
@@ -63,32 +62,22 @@ TAU = config.get("tau", 0.005)
 LEARN_ALPHA = config.get("learn_alpha", True)
 ALPHA = config.get("alpha", 0.2)
 
+USE_PER = config.get("use_per", False)
+USE_ERE = config.get("use_ere", False)
+PER_ALPHA = config.get("per_alpha", 0.6)
+PER_BETA = config.get("per_beta", 0.4)
+ERE_ETA0 = config.get("ere_eta0", 0.996)
+ERE_MIN_SIZE = config.get("ere_min_size", 2500)
+
+REWARD = config.get("reward", "basic")
+
 # Ensure output directory exists
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Hockey environment selection logic
-CMD_EXTRA = []
-if "Hockey" in ENV_NAME:
-    if OPPONENT_TYPE == "none":
-        ENV_NAME = "Hockey-v0"
-    elif OPPONENT_TYPE in ["basic", "weak_basic"]:
-        ENV_NAME = "Hockey-One-v0"
-    elif OPPONENT_TYPE == "human":
-        ENV_NAME = "Hockey-v0"
-    else:
-        print(f"Invalid opponent type: {OPPONENT_TYPE}")
-        sys.exit(1)
-
-    MODE_VALUE = {"NORMAL": 0, "TRAIN_SHOOTING": 1, "TRAIN_DEFENSE": 2}.get(HOCKEY_MODE)
-    if MODE_VALUE is None:
-        print(f"Invalid hockey mode: {HOCKEY_MODE}")
-        sys.exit(1)
-
-    CMD_EXTRA = ["--hockey_mode", HOCKEY_MODE, "--opponent_type", OPPONENT_TYPE]
-    if KEEP_MODE:
-        CMD_EXTRA.append("--keep_mode")
-
-
+CMD_EXTRA = ["--hockey_mode", HOCKEY_MODE, "--opponent_type", OPPONENT_TYPE]
+if KEEP_MODE:
+    CMD_EXTRA.append("--keep_mode")
+    
 # Construct the command to call your trainer
 CMD = [
     "python", "src/hockey_trainer.py",
@@ -98,7 +87,6 @@ CMD = [
     "--lr", str(LR),
     "--max_episodes", str(MAX_EPISODES),
     "--max_timesteps", str(MAX_TIMESTEPS),
-    "--loss_type", LOSS_TYPE,
     "--update_every", str(UPDATE_EVERY),
     "--save_interval", str(SAVE_INTERVAL),
     "--log_interval", str(LOG_INTERVAL),
@@ -122,8 +110,19 @@ CMD = [
     "--tau", str(TAU),
     "--learn_alpha", str(LEARN_ALPHA),
     "--alpha", str(ALPHA),
+    
+    "--per_alpha", str(PER_ALPHA),
+    "--per_beta", str(PER_BETA),
+    "--ere_eta0", str(ERE_ETA0),
+    "--ere_min_size", str(ERE_MIN_SIZE),
+    "--reward", str(REWARD),
 ] + CMD_EXTRA
 
+if USE_PER:
+    CMD.append("--use_per")
+if USE_ERE:
+    CMD.append("--use_ere")
+    
 if JID:
     CMD += ["--id", JID]
 
