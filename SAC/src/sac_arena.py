@@ -34,7 +34,7 @@ from datetime import datetime
 from hockey_env import HockeyEnv, Mode, BasicOpponent
 from sac import SACAgent
 import time
-
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def load_sac_agent(config_path, checkpoint_path, env):
     """
@@ -48,7 +48,7 @@ def load_sac_agent(config_path, checkpoint_path, env):
     and restores its state from the checkpoint.
     """
     # Load the checkpoint (forcing CPU map location for compatibility)
-    checkpoint = torch.load(checkpoint_path, map_location=torch.device("cpu"))
+    checkpoint = torch.load(checkpoint_path, map_location=torch.device(device))
 
     # Try to get the config from the checkpoint; if not found, load from the config file.
     if "config" in checkpoint:
@@ -156,14 +156,14 @@ def load_td3_agent(config_path, checkpoint_prefix, env):
         torch.load(
             checkpoint_prefix + "_critic.pth",
             weights_only=True,
-            map_location=torch.device("cpu"),
+            map_location=torch.device(device),
         )
     )
     agent.critic_optimizer.load_state_dict(
         torch.load(
             checkpoint_prefix + "_critic_optimizer.pth",
             weights_only=True,
-            map_location=torch.device("cpu"),
+            map_location=torch.device(device),
         )
     )
     agent.critic_target = copy.deepcopy(agent.critic)
@@ -172,14 +172,14 @@ def load_td3_agent(config_path, checkpoint_prefix, env):
         torch.load(
             checkpoint_prefix + "_actor.pth",
             weights_only=True,
-            map_location=torch.device("cpu"),
+            map_location=torch.device(device),
         )
     )
     agent.actor_optimizer.load_state_dict(
         torch.load(
             checkpoint_prefix + "_actor_optimizer.pth",
             weights_only=True,
-            map_location=torch.device("cpu"),
+            map_location=torch.device(device),
         )
     )
     agent.actor_target = copy.deepcopy(agent.actor)
@@ -189,21 +189,21 @@ def load_td3_agent(config_path, checkpoint_prefix, env):
             torch.load(
                 checkpoint_prefix + "_rnd_target.pth",
                 weights_only=True,
-                map_location=torch.device("cpu"),
+                map_location=torch.device(device),
             )
         )
         agent.rnd.predictor_network.load_state_dict(
             torch.load(
                 checkpoint_prefix + "_rnd_predictor.pth",
                 weights_only=True,
-                map_location=torch.device("cpu"),
+                map_location=torch.device(device),
             )
         )
         agent.rnd.optimizer.load_state_dict(
             torch.load(
                 checkpoint_prefix + "_rnd_optimizer.pth",
                 weights_only=True,
-                map_location=torch.device("cpu"),
+                map_location=torch.device(device),
             )
         )
     return agent
@@ -379,6 +379,8 @@ def main():
     plt.savefig(plot_filename)
     plt.show()
     # print(f"Saved evaluation plot as {plot_filename}")
+    
+    return values
 
 
 if __name__ == "__main__":
