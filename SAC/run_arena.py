@@ -64,7 +64,7 @@ def main():
         sys.argv.append("--render")
 
     # Call the main function from sac_arena.py.
-    sac_arena.main()
+    (agent1win, agent2win, tie) = sac_arena.main()
 
 
 if __name__ == "__main__":

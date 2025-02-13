@@ -136,7 +136,9 @@ class Trainer:
         hidden_actor = list(map(int, self.args.hidden_sizes_actor.split(",")))
         hidden_critic = list(map(int, self.args.hidden_sizes_critic.split(",")))
         learn_alpha_bool = self.args.learn_alpha.lower() == "true"
-
+        self.args.beta_frames = self.args.max_episodes * self.args.max_timesteps
+        
+        
         self.agent = SACAgent(
             observation_space=self.env.observation_space,
             action_space=self.env.action_space,
@@ -165,6 +167,7 @@ class Trainer:
             tau=self.args.tau,
             learn_alpha=learn_alpha_bool,
             alpha=self.args.alpha,
+            beta_frames=self.args.beta_frames,
             control_half=True   # True by default for hockey environment
         )
 
@@ -266,6 +269,7 @@ class Trainer:
             f"  Enabled: {self.args.use_per}",
             f"  PER Alpha: {self.args.per_alpha}",
             f"  PER Beta: {self.args.per_beta}",
+            f"  Beta frames: {self.args.beta_frames}",
             "\nERE Configuration:",
             f"  Enabled: {self.args.use_ere}",
             f"  ERE Eta0: {self.args.ere_eta0}",
@@ -402,10 +406,13 @@ class Trainer:
             # rollout phase
             for t in range(self.args.max_timesteps):
                 self.timestep += 1
-                agent_action = self.agent.act(obs)
+                agent_action = self.agent.act(obs, eval_mode=False, rollout=True)
                 if self.opponent is not None:
                     opponent_obs = self.env.obs_agent_two() if hasattr(self.env, "obs_agent_two") else obs
-                    opponent_action = self.opponent.act(opponent_obs)
+                    if isinstance(self.opponent, TrainedOpponent):
+                        opponent_action = self.opponent.act(opponent_obs, eval_mode=False, rollout=True)
+                    else:
+                        opponent_action = self.opponent.act(opponent_obs)
                     full_action = np.hstack([agent_action, opponent_action])
                 else:
                     # If no opponent, just use the agent's action.
@@ -420,6 +427,7 @@ class Trainer:
                 if done or trunc:
                     break
             # training phase
+            # sample function is direcly called without explorative noise
             self.losses.extend(self.agent.train(self.agent.K))
             self.rewards.append(total_reward)
             self.lengths.append(t)

@@ -71,7 +71,7 @@ class SACAgent:
             "use_per": False,
             "per_alpha": 0.6,  # beta_1 in PER paper
             "per_beta": 0.4,  # beta_2 in PER paper
-            "per_beta_increment": 0.001,
+            "beta_frames": 1000000,
             # ERE parameters
             "use_ere": False,
             "ere_eta0": 0.996,  # Initial ERE decay rate
@@ -154,7 +154,7 @@ class SACAgent:
                     max_size=self._config["buffer_size"],
                     beta_1=self._config["per_alpha"],
                     beta_2=self._config["per_beta"],
-                    beta_increment=self._config["per_beta_increment"],
+                    beta_frames=self._config["beta_frames"],
                     epsilon=self._config["epsilon"],
                     eta_0=self._config["ere_eta0"],
                     eta_T=self._config["ere_etaT"],
@@ -165,7 +165,7 @@ class SACAgent:
                     max_size=self._config["buffer_size"],
                     beta_1=self._config["per_alpha"],
                     beta_2=self._config["per_beta"],
-                    beta_increment=self._config["per_beta_increment"],
+                    beta_frames=self._config["beta_frames"],
                     epsilon=self._config["epsilon"]
                 )
         else:
@@ -186,7 +186,7 @@ class SACAgent:
         if hasattr(self.actor.noise, "reset"):
             self.actor.noise.reset()
 
-    def act(self, observation, eval_mode=False):
+    def act(self, observation, eval_mode=False, rollout=False):
         observation = torch.FloatTensor(observation).unsqueeze(0).to(device)
 
         with torch.no_grad():
@@ -196,8 +196,11 @@ class SACAgent:
                     torch.tanh(action_mean) * self.actor.action_scale
                     + self.actor.action_bias
                 )
-            else: # training mode
+            elif rollout: # rollout
+                action, _ = self.actor.sample(observation, use_exploration_noise=True)
+            else: # gradient step
                 action, _ = self.actor.sample(observation)
+                
 
         return action.cpu().numpy()[0]
 

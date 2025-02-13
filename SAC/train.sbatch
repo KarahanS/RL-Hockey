@@ -2,10 +2,10 @@
 
 #SBATCH --job-name=sac
 #SBATCH --cpus-per-task=4  # max 24 per node
-#SBATCH --partition=day   
+#SBATCH --partition=week   
 #SBATCH --mem-per-cpu=3G   # max 251GB per node
 #SBATCH --gres=gpu:1        # each node has 4 gpus
-#SBATCH --time=24:00:00  # 24 hours
+#SBATCH --time=48:00:00  # 48 hours
 #SBATCH --error=slurm/%J-%x.err
 #SBATCH --output=slurm/%J-%x.out
 
