@@ -196,7 +196,7 @@ class SACAgent:
                     torch.tanh(action_mean) * self.actor.action_scale
                     + self.actor.action_bias
                 )
-            else:
+            else: # training mode
                 action, _ = self.actor.sample(observation)
 
         return action.cpu().numpy()[0]

@@ -142,30 +142,62 @@ class Actor(FeedForward):
         log_std = torch.clamp(log_std, -20, 10)
         return mean, log_std
 
-    def sample(self, obs):
+    def sample(self, obs, use_exploration_noise: bool = False):
+        """
+        Sample an action given an observation.
+
+        Args:
+            obs: The input observation.
+            use_exploration_noise: If True, adds extra exploration noise to the final action.
+                                This extra noise is applied after computing the differentiable
+                                part of the policy (for environment interaction only).
+
+        Returns:
+            action: The final (possibly clipped) action.
+            log_prob: The log probability of the action before adding extra exploration noise.
+        """
+        # USE EXPLORATIVE NOISE ONLY DURING ROLL-OUTS (NOT DURING GRADIENT STEPS)
+        # This function is used only during training (not evaluation, so don't worry about that)
+        
+        # --- Differentiable Reparameterization for Training ---
+        # Compute mean and log_std from the network
         mean, log_std = self.forward(obs)
         std = log_std.exp()
 
-        # regardless of what noise we are using, we always apply the following conversion:
-        # x_t = mean + std * noise
-        # y_t = tanh(x_t) (tanh squashing)
-        # action = y_t * self.action_scale + self.action_bias
-
-        noise = torch.FloatTensor(self.noise()).to(self.device)
+        # Use standard Gaussian noise for the reparameterization trick
+        noise = torch.randn_like(mean)
         x_t = mean + std * noise
 
-        # Squash using tanh
+        # Apply tanh squashing and scale to the action space
         y_t = torch.tanh(x_t)
         action = y_t * self.action_scale + self.action_bias
 
-        # Calculate log probability
-        log_prob = (
-            -((x_t - mean) ** 2) / (2 * std**2) - log_std - np.log(np.sqrt(2 * np.pi))
-        )
+        # --- Compute Log Probability ---
+        # Calculate the Gaussian log probability for x_t under N(mean, std)
+        log_prob = -0.5 * (((x_t - mean) / (std + self.epsilon)) ** 2 +
+                        2 * log_std +
+                        np.log(2 * np.pi))
+        # Apply correction for tanh squashing (Jacobian adjustment)
         log_prob -= torch.log(self.action_scale * (1 - y_t.pow(2)) + self.epsilon)
-        log_prob = log_prob.sum(1, keepdim=True)
+        log_prob = log_prob.sum(dim=-1, keepdim=True)
+
+        # --- Optional: Add Extra Exploration Noise ---
+        # IMPORTANT: This extra noise is added for acting in the environment and is not used
+        # in the gradient computation (log_prob remains based on the reparameterized action).
+        if use_exploration_noise:
+            extra_noise = torch.FloatTensor(self.noise()).to(self.device)
+            action = action + extra_noise
+
+        # --- Clip the Final Action ---
+        # Calculate the valid bounds based on action_scale and action_bias:
+        # For a tanh output in [-1,1], action = tanh_output * action_scale + action_bias is
+        # naturally within [action_bias - action_scale, action_bias + action_scale].
+        min_action = self.action_bias - self.action_scale # -1
+        max_action = self.action_bias + self.action_scale # +1
+        action = torch.clamp(action, min=min_action, max=max_action)
 
         return action, log_prob
+
     
     def get_state(self):
         """

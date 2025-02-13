@@ -398,6 +398,8 @@ class Trainer:
             self.agent.reset_noise()
             obs, _info = self.env.reset()
             total_reward = 0.0
+            
+            # rollout phase
             for t in range(self.args.max_timesteps):
                 self.timestep += 1
                 agent_action = self.agent.act(obs)
@@ -417,6 +419,7 @@ class Trainer:
                 obs = next_obs
                 if done or trunc:
                     break
+            # training phase
             self.losses.extend(self.agent.train(self.agent.K))
             self.rewards.append(total_reward)
             self.lengths.append(t)
@@ -479,7 +482,7 @@ class Trainer:
         print(f"[Parallel Eval] Win Ratio: {win_ratio:.3f}, Avg Reward: {avg_reward:.2f}")
         return win_ratio
     
-    def _run_eval_episode(agent, opponent, env_params, seed):
+    def _run_eval_episode(self, agent, opponent, env_params, seed):
         """
         Run one evaluation episode in a fresh environment instance.
         

@@ -376,8 +376,8 @@ def main():
         )
     plot_filename = f"evaluation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
     # save as pdf
-    plt.savefig(plot_filename)
-    plt.show()
+    #plt.savefig(plot_filename)
+    #plt.show()
     # print(f"Saved evaluation plot as {plot_filename}")
     
     return values

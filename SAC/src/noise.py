@@ -88,6 +88,7 @@ class OrnsteinUhlenbeckActionNoise(ActionNoise):
         self._dtype = dtype
         self.initial_noise = initial_noise
         self.noise_prev = np.zeros_like(self._mu)
+        self.sqrtdt = np.sqrt(self._dt)
         self.reset()
         super().__init__()
 
@@ -95,7 +96,7 @@ class OrnsteinUhlenbeckActionNoise(ActionNoise):
         noise = (
             self.noise_prev
             + self._theta * (self._mu - self.noise_prev) * self._dt
-            + self._sigma * np.sqrt(self._dt) * np.random.normal(size=self._mu.shape)
+            + self._sigma * self.sqrtdt * np.random.normal(size=self._mu.shape)
         )
         self.noise_prev = noise
         return noise.astype(self._dtype)
