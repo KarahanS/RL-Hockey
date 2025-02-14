@@ -136,8 +136,7 @@ class Trainer:
         hidden_actor = list(map(int, self.args.hidden_sizes_actor.split(",")))
         hidden_critic = list(map(int, self.args.hidden_sizes_critic.split(",")))
         learn_alpha_bool = self.args.learn_alpha.lower() == "true"
-        self.args.beta_frames = self.args.max_episodes * self.args.max_timesteps
-        
+        #self.args.beta_frames = self.args.max_episodes * self.args.max_timesteps
         
         self.agent = SACAgent(
             observation_space=self.env.observation_space,
@@ -167,7 +166,6 @@ class Trainer:
             tau=self.args.tau,
             learn_alpha=learn_alpha_bool,
             alpha=self.args.alpha,
-            beta_frames=self.args.beta_frames,
             control_half=True   # True by default for hockey environment
         )
 
@@ -269,7 +267,6 @@ class Trainer:
             f"  Enabled: {self.args.use_per}",
             f"  PER Alpha: {self.args.per_alpha}",
             f"  PER Beta: {self.args.per_beta}",
-            f"  Beta frames: {self.args.beta_frames}",
             "\nERE Configuration:",
             f"  Enabled: {self.args.use_ere}",
             f"  ERE Eta0: {self.args.ere_eta0}",
