@@ -12,6 +12,7 @@ root_dir = os.path.dirname(os.path.abspath("../"))
 if root_dir not in sys.path:
     sys.path.append(root_dir)
 
+from DDQN.action_space import CustomActionSpace
 from DDQN.DQN import DQNAgent, TargetDQNAgent, DoubleDQNAgent
 from DDQN.DDQN import DuelingDQNAgent, DoubleDuelingDQNAgent
 from DDQN.trainer import Stats, Round, CustomHockeyMode, RandomWeaknessBasicOpponent, \
@@ -48,7 +49,7 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
     # TODO: Can we just explode the hparams dict here?
     agent_player = agent_class(
         env.observation_space,
-        env.discrete_action_space,
+        CustomActionSpace(),  # env.discrete_action_space,
         per=hparams["per"],
         hidden_sizes=hparams["hidden_sizes"],
         hidden_sizes_A=hparams["hidden_sizes_A"],
@@ -71,7 +72,8 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
     """
     agent_opp_self_frozen = copy.deepcopy(agent_player)  # Pretrained and frozen good DQN player
     try:
-        agent_opp_self_frozen.load_state(model_dir)  # FIXME: Replace with fixed paths with proper weights of a default size
+        # FIXME: Replace with fixed paths with proper weights of a default size. need to load according to the agent type
+        agent_opp_self_frozen.load_state(good_model_path)
     except RuntimeError:
         print("WARNING: Pretrained model incompatible with agent. Evaluation against frozen"
               " self copy will use a non-initialized copy of the agent.")
@@ -128,7 +130,7 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
     )
 
     # Save the agent model weights
-    agent_player.save_state(model_dir)
+    agent_player.save_state(os.path.join(model_dir, "Q_model.ckpt"))
 
     # Plot the statistics & save
     if not skip_plot:

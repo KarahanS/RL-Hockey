@@ -178,18 +178,18 @@ class DQNAgent(object):
         
         return losses
 
-    def save_state(self, save_dir, filename="Q_model.ckpt"):
+    def save_state(self, save_path):
+        save_dir = os.path.dirname(save_path)
+
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
         
-        torch.save(
-            self.Q.state_dict(),
-            os.path.join(save_dir, filename)
-        )
+        torch.save(self.Q.state_dict(), save_path)
 
-    def load_state(self, load_dir, filename="Q_model.ckpt"):
+    def load_state(self, load_path):  # TODO: merge args
         self.Q.load_state_dict(
-            torch.load(os.path.join(load_dir, filename), weights_only=True)
+            #torch.load(os.path.join(load_dir, filename), weights_only=True)
+            torch.load(load_path, weights_only=True)
         )
 
 

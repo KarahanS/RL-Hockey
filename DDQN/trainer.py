@@ -297,14 +297,14 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, model_dir: str, max_
             
             if (eval_freq > 0) and (total_eps % eval_freq == 0 or i == max_ep - 1):
                 # Agent back-up
-                for p in Path(model_dir).glob("Q_model_ep_*.ckpt"):
+                for p in Path(model_dir).glob("Q_model_ep_*.ckpt"):  # TODO: remove only if worse - keep best rather than latest
                     p.unlink()
-                agent.save_state(model_dir, f"Q_model_ep_{total_eps}.ckpt")
+                agent.save_state(os.path.join(model_dir, f"Q_model_ep_{total_eps}.ckpt"))
 
                 # Evaluation
                 # Copy agent: copy from dict and reinitialize to avoid deepcopy protocol error
                 agent_copy = copy.deepcopy(eval_opps_dict["self_copy"])
-                agent_copy.load_state(model_dir, f"Q_model_ep_{total_eps}.ckpt")
+                agent_copy.load_state(os.path.join(model_dir, f"Q_model_ep_{total_eps}.ckpt"))
 
                 # Same for self_scratch opponent if it exists
                 # FIXME: This is hacky: need to pinpoint the exact tensor issue with MemoryPERTorch
@@ -314,9 +314,13 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, model_dir: str, max_
                 for name, opp in eval_opps_dict.items():
                     if name == "self_scratch":
                         agent_scratch = eval_opps_dict["self_scratch"]
-                        agent_scratch.save_state(model_dir, f"Q_model_ep_{total_eps}_COTRAIN_TEMP.ckpt")
+                        agent_scratch.save_state(
+                            os.path.join(model_dir, f"Q_model_ep_{total_eps}_COTRAIN_TEMP.ckpt")
+                        )
                         agent_scratch_copy = copy.deepcopy(eval_opps_dict["self_copy"])
-                        agent_scratch_copy.load_state(model_dir, f"Q_model_ep_{total_eps}_COTRAIN_TEMP.ckpt")
+                        agent_scratch_copy.load_state(
+                            os.path.join(model_dir, f"Q_model_ep_{total_eps}_COTRAIN_TEMP.ckpt")
+                        )
 
                         for p in Path(model_dir).glob("Q_model_ep_*_COTRAIN_TEMP.ckpt"):
                             p.unlink()
@@ -324,8 +328,7 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, model_dir: str, max_
                         eval_opps_dict_copy[name] = agent_scratch_copy
                     else:
                         eval_opps_dict_copy[name] = copy.deepcopy(opp)
-                
-                eval_opps_dict_copy["Self-copied"] = agent_copy
+                eval_opps_dict_copy["self_copy"] = agent_copy
 
                 env_copy = copy.deepcopy(env)  # Each thread needs its own copy
 
