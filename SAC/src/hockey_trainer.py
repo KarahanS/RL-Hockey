@@ -22,7 +22,8 @@ import os
 
 
 from sac import SACAgent
-from hockey_env import HockeyEnv, BasicOpponent, Mode   # your hockey environment and basic opponent
+from memory import PrioritizedExperienceReplay
+from hockey_env import HockeyEnv, BasicOpponent, Mode, BasicDefenseOpponent, BasicAttackOpponent   # your hockey environment and basic opponent
 from noise import *  # your noise module
 from enum import Enum
 
@@ -181,6 +182,13 @@ class Trainer:
             self.opponent = BasicOpponent(weak=False, keep_mode=self.args.keep_mode)
         else:
             self.opponent = None
+        
+        if self.args.hockey_mode.lower() == "train_defense":
+            self.opponent = BasicAttackOpponent(keep_mode=self.args.keep_mode)
+        elif self.args.hockey_mode.lower() == "train_shooting":
+            self.opponent = BasicDefenseOpponent(keep_mode=self.args.keep_mode)
+            
+            
 
     def get_run_name(self):
         if self.args.name != "SAC":
@@ -407,7 +415,7 @@ class Trainer:
                 if self.opponent is not None:
                     opponent_obs = self.env.obs_agent_two() if hasattr(self.env, "obs_agent_two") else obs
                     if isinstance(self.opponent, TrainedOpponent):
-                        opponent_action = self.opponent.act(opponent_obs, eval_mode=False, rollout=True)
+                        opponent_action = self.opponent.act(opponent_obs, eval_mode=True, rollout=False) # opponent is always in eval mode
                     else:
                         opponent_action = self.opponent.act(opponent_obs)
                     full_action = np.hstack([agent_action, opponent_action])
@@ -419,12 +427,20 @@ class Trainer:
                 next_obs, reward, done, trunc, info = self.env.step(full_action)
                 total_reward += reward
                 self.agent.store_transition((obs, agent_action, reward, next_obs, done))
+                
+                # ----- Minimal change for symmetry: -----
+                
+                #mirrored_obs = self.env.mirror_state(obs)
+                #mirrored_agent_action = self.env.mirror_action(agent_action)
+                #mirrored_next_obs = self.env.mirror_state(next_obs)
+                #self.agent.store_transition((mirrored_obs, mirrored_agent_action, reward, mirrored_next_obs, done))
+            
+                # ----------------------------------------
                 self.agent.K += 1
                 obs = next_obs
                 if done or trunc:
                     break
-            # training phase
-            # sample function is direcly called without explorative noise
+
             self.losses.extend(self.agent.train(self.agent.K))
             self.rewards.append(total_reward)
             self.lengths.append(t)

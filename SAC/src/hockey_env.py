@@ -329,18 +329,23 @@ class HockeyEnv(gym.Env, EzPickle):
 
 
     def mirror_action(self, action: np.ndarray) -> np.ndarray:
-        # Here we assume the action vector is of size 8:
-
-        # For each agent: [x change, y change, angle change, shoot]
         mirrored = action.copy()
-        # For agent 1 (indices 0-3): flip y change (index 1) and angle change (index 2)
-        mirrored[1] = -mirrored[1]
-        mirrored[2] = -mirrored[2]
-        # For agent 2 (indices 4-7): flip y change (index 5) and angle change (index 6)
-        mirrored[5] = -mirrored[5]
-        mirrored[6] = -mirrored[6]
-        # The "shoot" commands (indices 3 and 7) remain unchanged
+        if len(mirrored) == 4:
+            # Single agent action: indices 0: x, 1: y, 2: angle, 3: shoot
+            mirrored[1] = -mirrored[1]   # flip y
+            mirrored[2] = -mirrored[2]   # flip angle
+        elif len(mirrored) == 8:
+            # Full action vector for both agents:
+            # For agent 1 (indices 0-3): flip y (index 1) and angle (index 2)
+            mirrored[1] = -mirrored[1]
+            mirrored[2] = -mirrored[2]
+            # For agent 2 (indices 4-7): flip y (index 5) and angle (index 6)
+            mirrored[5] = -mirrored[5]
+            mirrored[6] = -mirrored[6]
+        else:
+            raise ValueError(f"Unexpected action dimension: {len(mirrored)}")
         return mirrored
+
     
     def _create_player(self, position, color, is_player_two):
         player = self.world.CreateDynamicBody(
@@ -1543,7 +1548,78 @@ class HumanOpponent:
                 action = self.key_action_mapping[key]
         return self.env.discrete_to_continous_action(action)
 
+class BasicDefenseOpponent:
+    """
+    In attack mode, the opponent uses a defensive strategy:
+    It always runs straight toward its own net.
+    In the mirrored observation space, this fixed target is set to (-210/SCALE, 0).
+    """
+    def __init__(self, keep_mode=True):
+        self.keep_mode = keep_mode
+        self.kp = 0.5
+        self.kd = 0.5
 
+    def act(self, obs, verbose=False):
+        # In the mirrored observation, the opponent's own state is given as:
+        # [x position, y position, angle, x velocity, y velocity, angular velocity, ...]
+        # We extract the first three values as position and angle.
+        p = np.asarray([obs[0], obs[1], obs[2]])
+        v = np.asarray(obs[3:6])
+        # Set a fixed target: in mirrored coordinates, the opponent's net is at (-210/SCALE, 0)
+        target_pos = np.array([-210.0 / SCALE, 0.0])
+        target_angle = 0.0
+        target = np.array([target_pos[0], target_pos[1], target_angle])
+        error = target - p
+        time_to_break = 0.1
+        need_break = np.abs(error / (v + 0.01)) < np.array([time_to_break, time_to_break, time_to_break * 10])
+        action = np.clip(
+            error * np.array([self.kp, self.kp / 5, self.kp / 2])
+            - v * need_break * np.array([self.kd, self.kd, self.kd]),
+            -1,
+            1,
+        )
+        shoot = 0.0  # Defense opponent does not shoot.
+        if self.keep_mode:
+            return np.hstack([action, [shoot]])
+        else:
+            return action
+
+
+class BasicAttackOpponent:
+    """
+    In defense mode, the opponent uses an attacking strategy:
+    It always runs toward the middle of the field and tries to shoot.
+    In the mirrored observation space, the middle is at (0,0).
+    """
+    def __init__(self, keep_mode=True):
+        self.keep_mode = keep_mode
+        self.kp = 0.5
+        self.kd = 0.5
+
+    def act(self, obs, verbose=False):
+        p = np.asarray([obs[0], obs[1], obs[2]])
+        v = np.asarray(obs[3:6])
+        # Target the middle of the field (0, 0) with zero target angle.
+        target_pos = np.array([0.0, 0.0])
+        target_angle = 0.0
+        target = np.array([target_pos[0], target_pos[1], target_angle])
+        error = target - p
+        time_to_break = 0.1
+        need_break = np.abs(error / (v + 0.01)) < np.array([time_to_break, time_to_break, time_to_break * 10])
+        action = np.clip(
+            error * np.array([self.kp, self.kp / 5, self.kp / 2])
+            - v * need_break * np.array([self.kd, self.kd, self.kd]),
+            -1,
+            1,
+        )
+        # Attack opponent tries to shoot
+        shoot = 1.0 if self.keep_mode else 0.0
+        if self.keep_mode:
+            return np.hstack([action, [shoot]])
+        else:
+            return action
+        
+        
 class HockeyEnv_BasicOpponent(HockeyEnv):
     def __init__(self, mode=Mode.NORMAL, weak_opponent=False):
         super().__init__(mode=mode, keep_mode=True)
