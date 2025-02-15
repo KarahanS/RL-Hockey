@@ -55,7 +55,7 @@ def compare_agents(agent_player: DQNAgent, agent_opp: DQNAgent | BasicOpponent, 
         while not (done or trunc):
             if render:
                 env.render()
-            discrete_to
+            
             a1_discr = agent_player.act(obs)
             a1 = CustomActionSpace.discrete_to_continuous(a1_discr)
             a2 = agent_opp.act(obs_opp)
