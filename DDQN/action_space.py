@@ -54,4 +54,4 @@ class CustomActionSpace(Discrete):
         return np.array(CustomActionSpace.actions[action])
 
     def __len__(self):
-        return self.n_actions
+        return self.n

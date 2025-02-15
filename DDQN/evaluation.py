@@ -7,6 +7,7 @@ root_dir = os.path.dirname(os.path.abspath("./"))
 if root_dir not in sys.path:
     sys.path.append(root_dir)
 
+from DDQN.action_space import CustomActionSpace
 from DDQN.DQN import DQNAgent
 from hockey.hockey_env import HockeyEnv, BasicOpponent
 
@@ -54,12 +55,12 @@ def compare_agents(agent_player: DQNAgent, agent_opp: DQNAgent | BasicOpponent, 
         while not (done or trunc):
             if render:
                 env.render()
-            
+            discrete_to
             a1_discr = agent_player.act(obs)
-            a1 = env.discrete_to_continous_action(a1_discr)
+            a1 = CustomActionSpace.discrete_to_continuous(a1_discr)
             a2 = agent_opp.act(obs_opp)
             if isinstance(agent_opp, DQNAgent):
-                a2 = env.discrete_to_continous_action(a2)
+                a2 = CustomActionSpace.discrete_to_continuous(a2)
 
             obs, reward, done, trunc, info_player = env.step(np.hstack([a1, a2]))
             info_opp = env.get_info_agent_two()
