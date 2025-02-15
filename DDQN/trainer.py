@@ -135,7 +135,9 @@ def eval_task(agent_copy: DQNAgent, opps_dict_copy: dict, env_copy: HockeyEnv, c
     del env_copy
     del agent_copy
     for o in opps_dict_copy:  # FIXME: no need for individual delete when FIXME in train_ddqn_agent_torch is fixed
-        del opps_dict_copy[o]
+        temp = opps_dict_copy[o]
+        opps_dict_copy[o] = None
+        del temp
     del opps_dict_copy
 
 
