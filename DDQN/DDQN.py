@@ -22,6 +22,8 @@ class DuelingDQNBase:
         self.Q = DuelingQFunction(
             observation_dim=self._observation_space.shape[0],
             hidden_sizes=self._config["hidden_sizes"],
+            hidden_sizes_A=self._config["hidden_sizes_A"],
+            hidden_sizes_V=self._config["hidden_sizes_V"],
             action_dim=self._action_n,
             learning_rate=self._config["learning_rate"],
             use_torch=self._config["use_torch"]
