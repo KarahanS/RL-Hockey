@@ -720,38 +720,31 @@ class Trainer:
     # ----------------------------------------------------
     def train_self_play(self):
         """
-        Implements the self-play training regime:
-          1. Start with an agent that can beat the basic strong opponent (or user-provided).
-          2. Make one agent trainable, the other is fixed (exploits the policy).
-          3. Train for at least sp_min_epochs episodes.
-          4. Update the opponent if agent reaches sp_threshold average reward over last sp_min_epochs.
-          5. Repeat until no improvement.
-          6. With low probability, switch the opponent with an old version or the basic opponent.
+        Self-play mode 1:
+        1) Train for sp_min_epochs with the current (fixed) opponent
+        2) If average reward >= sp_threshold, update the opponent
+        3) Possibly switch with old versions or the 'strong' built-in
+        4) Mirror states if self.args.mirror is True
         """
-        # Step 1: We assume self.agent is our trainable agent.
-        # The "opponent" is initially loaded from config/checkpoint (if --sp_opponent_checkpoint was set)
-        # or we can set it to BasicOpponent(weak=False) if you want the "strong" as initial baseline.
-
-        # We'll keep track of old snapshots of the agent
         old_opponents = []
-
         best_avg_reward = -9999.0
         episodes_since_update = 0
-        # We do a while loop or up to max_episodes
         episode = 0
+
         while episode < self.args.max_episodes:
-            # 2/3. Train for sp_min_epochs episodes with the current opponent
             sp_min = self.args.sp_min_epochs
             local_rewards = []
+
             for local_ep in range(sp_min):
                 episode += 1
                 obs, _info = self.env.reset()
                 self.agent.K = 0
                 total_reward = 0.0
+
                 for t in range(self.args.max_timesteps):
                     agent_action = self.agent.act(obs, eval_mode=False, rollout=True)
+
                     if self.opponent is not None:
-                        # Opponent action
                         opponent_obs = self.env.obs_agent_two() if hasattr(self.env, "obs_agent_two") else obs
                         opponent_action = self.opponent.act(opponent_obs)
                         full_action = np.hstack([agent_action, opponent_action])
@@ -761,18 +754,27 @@ class Trainer:
                     next_obs, reward, done, trunc, info = self.env.step(full_action)
                     total_reward += reward
                     self.agent.store_transition((obs, agent_action, reward, next_obs, done))
+
+                    # ---- Mirror augmentation if enabled ----
+                    if self.args.mirror:
+                        mirrored_obs = self.env.mirror_state(obs)
+                        mirrored_agent_action = self.env.mirror_action(agent_action)
+                        mirrored_next_obs = self.env.mirror_state(next_obs)
+                        self.agent.store_transition((mirrored_obs, mirrored_agent_action, reward, mirrored_next_obs, done))
+                    # ----------------------------------------
+
                     self.agent.K += 1
                     obs = next_obs
                     if done or trunc:
                         break
 
-                # Perform learning updates after the episode
+                # After each episode, do training updates
                 self.losses.extend(self.agent.train(self.agent.K))
                 self.rewards.append(total_reward)
                 self.lengths.append(t)
                 local_rewards.append(total_reward)
 
-                # Evaluate (optional) every N episodes
+                # Evaluate if needed
                 if self.args.eval_interval > 0 and episode % self.args.eval_interval == 0:
                     ratio = self.evaluate_policy(eval_episodes=self.args.eval_episodes)
                     self.eval_win_ratios.append(ratio)
@@ -782,10 +784,12 @@ class Trainer:
                     with open(self.log_file, "a") as f:
                         f.write(eval_msg + "\n")
 
+                # Checkpoint & plots
                 if episode % self.args.save_interval == 0:
                     self.save_checkpoint(episode)
                     self.plot_metrics()
 
+                # Logging
                 if episode % self.args.log_interval == 0:
                     avg_reward = np.mean(self.rewards[-self.args.log_interval:])
                     avg_length = int(np.mean(self.lengths[-self.args.log_interval:]))
@@ -797,90 +801,68 @@ class Trainer:
                 if episode >= self.args.max_episodes:
                     break
 
-            # 4. Check if the agent's average reward over these sp_min_epochs >= sp_threshold
+            # After sp_min_epochs, check average reward
             mean_local = np.mean(local_rewards)
             if mean_local >= self.args.sp_threshold:
-                # Update the opponent
                 print(f"Updating opponent!  Average Reward over last {sp_min} = {mean_local:.2f}")
-                # store the old opponent
                 old_opponents.append(self.copy_agent(self.opponent))
-                # the new opponent is a snapshot of our newly trained agent
-                # (NEW, GOOD: single wrap)
                 new_opponent_snapshot = self.copy_agent(self.agent)
                 self.opponent = new_opponent_snapshot
-
                 best_avg_reward = mean_local
                 episodes_since_update = 0
             else:
                 episodes_since_update += sp_min
 
-            # 5. If the agent cannot improve anymore (e.g., no update after X cycles), break
-            #    (You can define your own patience. Here we'll just check if it didn't improve for 5 cycles)
+            # If no improvement for 5 cycles, break
             if episodes_since_update >= (5 * sp_min):
                 print("No improvement for 5 cycles; stopping self-play.")
                 break
 
-            # 6. With low probability, switch the opponent with an old version or the basic strong opponent
+            # With low prob, switch the opponent with old version or basic strong
             if random.random() < self.args.sp_switch_prob and (old_opponents or self.args.opponent_type.lower() != "none"):
                 candidates = []
-                # Basic strong if you want it:
                 candidates.append(BasicOpponent(weak=False, keep_mode=self.args.keep_mode))
-                # or from old_opponents:
                 candidates += old_opponents
                 chosen = random.choice(candidates)
-                if isinstance(chosen, BasicOpponent):
-                    self.opponent = chosen
-                else:
-                    self.opponent = chosen  # a stored old copy of TrainedOpponent
+                self.opponent = chosen
 
-        # Finished loop
         self.save_checkpoint("final")
         self.plot_metrics()
-        # ----------------------------------------------------
-    # MODE 2: PRIORITIZED OPPONENT BUFFER SELF-PLAY
-    # ---------------------------------------------------- # or wherever you defined it
-# Make sure the other imports (BasicOpponent, etc.) remain the same.
+
+
 
     def train_self_play_mode2(self):
         """
-        A "prioritized opponent buffer" approach with Discounted UCB (D‐UCB),
-        but uses WIN RATE (rather than average reward) to decide if we add
-        a new cloned opponent, matching the original approach EXACTLY.
+        Self-play mode 2 with PrioritizedOpponentBuffer (D-UCB).
+        We pick an opponent each episode from the buffer, do mirror if self.args.mirror,
+        and if the agent's win rate vs all opponents >= threshold, add a new clone.
         """
-
-        # ============ 1) CREATE THE D-UCB BUFFER ============
         self.ducb_buffer = PrioritizedOpponentBuffer(B=1, xi=1, gamma=0.95, tau=1000)
 
-        # ============ 2) ADD INITIAL OPPONENTS (WEAK, STRONG) ============
+        # Add initial opponents
         opp_weak = BasicOpponent(weak=True, keep_mode=self.args.keep_mode)
         opp_strong = BasicOpponent(weak=False, keep_mode=self.args.keep_mode)
-        self.ducb_buffer.add_opponent(opp_weak)     # index 0
-        self.ducb_buffer.add_opponent(opp_strong)   # index 1
+        self.ducb_buffer.add_opponent(opp_weak)
+        self.ducb_buffer.add_opponent(opp_strong)
 
-        # We'll define a "win rate threshold"
-        wr_opponent_thresh = self.args.sp_wr_threshold  # e.g. 0.95 from config
-
-        # How often we re-sample an opponent from D-UCB
+        wr_opponent_thresh = self.args.sp_wr_threshold
         n_update = self.args.sp_n_update
         episodes_since_sampling = 0
 
         episode = 0
         while episode < self.args.max_episodes:
-
-            # 3) We'll do "blocks" of sp_min_epochs episodes
             for local_ep in range(self.args.sp_min_epochs):
                 episode += 1
                 obs, _info = self.env.reset()
                 self.agent.K = 0
                 total_reward = 0.0
 
-                # 4) Pick an opponent from the buffer with D‐UCB
                 opp_idx, opponent = self.ducb_buffer.get_opponent()
 
-                # --------- Run one episode -----------
+                # Run one episode
                 for t in range(self.args.max_timesteps):
                     agent_action = self.agent.act(obs, eval_mode=False, rollout=True)
-                    # Opponent obs
+
                     opponent_obs = self.env.obs_agent_two() if hasattr(self.env, "obs_agent_two") else obs
                     opp_action = opponent.act(opponent_obs)
 
@@ -888,72 +870,68 @@ class Trainer:
                     next_obs, reward, done, trunc, info = self.env.step(full_action)
                     total_reward += reward
                     self.agent.store_transition((obs, agent_action, reward, next_obs, done))
+
+                    # Mirror transitions if requested
+                    if self.args.mirror:
+                        mirrored_obs = self.env.mirror_state(obs)
+                        mirrored_agent_action = self.env.mirror_action(agent_action)
+                        mirrored_next_obs = self.env.mirror_state(next_obs)
+                        self.agent.store_transition((mirrored_obs, mirrored_agent_action, reward, mirrored_next_obs, done))
+
                     self.agent.K += 1
                     obs = next_obs
                     if done or trunc:
                         break
-                # ---------- End episode -------------
 
-                # 5) Train agent after the episode
+                # Train agent
                 self.losses.extend(self.agent.train(self.agent.K))
                 self.rewards.append(total_reward)
                 self.lengths.append(t)
 
-                # 6) Record outcome for D‐UCB
+                # Register outcome in D-UCB
                 outcome = 0.0
                 if "winner" in info:
                     if info["winner"] == 1:
                         outcome = 1.0
                     elif info["winner"] == 0:
-                        outcome = 0.5  # or 0.0 for a draw
+                        outcome = 0.5
                     else:
                         outcome = 0.0
                 self.ducb_buffer.register_outcome(opp_idx, outcome)
 
-                # 7) Possibly switch to a new opponent after n_update episodes
+                # Possibly re-sample after n_update
                 episodes_since_sampling += 1
                 if episodes_since_sampling >= n_update:
                     episodes_since_sampling = 0
-                    # On next iteration, get_opponent() will pick another from D-UCB
+                    # Next iteration's get_opponent() will pick another
 
-                # 8) Evaluate every eval_interval episodes (like original code)
+                # Evaluate vs all existing opponents if needed
                 if self.args.eval_interval > 0 and episode % self.args.eval_interval == 0:
-                    # Evaluate vs. "weak" first
                     wr_weak = self.evaluate_win_rate(self.agent, opp_weak, self.args.eval_episodes)
                     update_opponent = (wr_weak >= wr_opponent_thresh)
 
-                    # If there's more than just weak/strong, check the rest
                     if self.ducb_buffer.K > 1 and update_opponent:
-                        # Opponents are self.ducb_buffer.opponents (indexes)
-                        # The first one is weak, second is strong, rest are clones
-                        # We'll check them all
                         for idx in range(1, self.ducb_buffer.K):
                             op = self.ducb_buffer.opponents[idx]
-                            # We skip if it's exactly the same as weak (index 0),
-                            # but typically index 1 is strong, index 2+ are clones
                             wr_i = self.evaluate_win_rate(self.agent, op, self.args.eval_episodes)
                             if wr_i < wr_opponent_thresh:
                                 update_opponent = False
                                 break
 
                     if update_opponent:
-                        print(f"[SP2] Episode {episode}: Win rate is above threshold {wr_opponent_thresh}, adding new opponent clone!")
-                        # Add new cloned opponent
+                        print(f"[SP2] Episode {episode}: Win rate above threshold {wr_opponent_thresh}, adding new clone.")
                         new_clone = self.copy_agent(self.agent)
                         self.ducb_buffer.add_opponent(new_clone)
 
-                    # (Optional) you could log or do something else with wr_weak
-                    eval_msg = f"[Eval] Episode {episode} -> wr_weak: {wr_weak:.3f}"
-                    print(eval_msg)
+                    msg = f"[Eval] Episode {episode} -> wr_weak: {wr_weak:.3f}"
+                    print(msg)
                     with open(self.log_file, "a") as f:
-                        f.write(eval_msg + "\n")
+                        f.write(msg + "\n")
 
-                # 9) Checkpoint & metrics
                 if episode % self.args.save_interval == 0:
                     self.save_checkpoint(episode)
                     self.plot_metrics()
 
-                # 10) Logging
                 if episode % self.args.log_interval == 0:
                     avg_reward = np.mean(self.rewards[-self.args.log_interval:])
                     avg_length = int(np.mean(self.lengths[-self.args.log_interval:]))
@@ -965,9 +943,9 @@ class Trainer:
                 if episode >= self.args.max_episodes:
                     break
 
-        # end while
         self.save_checkpoint("final")
         self.plot_metrics()
+
 
 
 
