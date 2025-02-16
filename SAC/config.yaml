@@ -1,14 +1,14 @@
 # Run name
-name: "default_fixed_(per:false_alphalearn:true)"
+name: "pink_advanced_200Ktotal_pob_npdate50_wr:0.95"
 
 # Environment and seed
 env_name: "Hockey"   # The Gym environment to train on ("Hockey-v0", "Hockey-One-v0", etc.)
 seed: 42                # Random seed for reproducibility
-reward: "basic"
+reward: "advanced"
 
 # Learning rates and training loops
 lr: 0.001             # Learning rate used by both actor and critic optimizers
-max_episodes: 10000    # Maximum number of training episodes
+max_episodes: 200000   # Maximum number of training episodes
 max_timesteps: 2000    # Maximum number of timesteps (steps) per episode
 
 # Loss / discounting
@@ -28,12 +28,12 @@ ere_min_size: 2500     # Minimum replay buffer size before applying ERE
 # Logging / checkpointing
 save_interval: 1000     # Save a checkpoint every N episodes
 log_interval: 20       # Print / log training information every N episodes
-buffer_size: 10000000   # Replay buffer size
+buffer_size: 1000000   # Replay buffer size
 output_dir: "./results"  # Directory to store logs, checkpoints, etc.
 
 # Noise configuration (used by some policies for exploration)
 noise:
-  type: "normal"       # Type of noise ("normal", "ornstein", "colored", etc.)
+  type: "colored"       # Type of noise ("normal", "ornstein", "colored", etc.)
   sigma: 0.1           # Standard deviation for normal/pink noise
   theta: 0.15          # Ornstein-Uhlenbeck parameter (if type = "ornstein")
   dt: 0.01             # Ornstein-Uhlenbeck time step (if type = "ornstein")
@@ -43,7 +43,7 @@ noise:
 # Hockey-specific
 hockey:
   mode: "NORMAL"         # Hockey mode: NORMAL, TRAIN_SHOOTING, or TRAIN_DEFENSE
-  opponent_type: "weak"  # "none", "weak_basic", "human", etc.
+  opponent_type: "strong"  # "none", "weak_basic", "human", etc.
   keep_mode: true        # Whether the puck can be "kept" by the player
 
 # Evaluation settings
@@ -57,3 +57,24 @@ hidden_sizes_critic: [256, 256]  # Hidden layer sizes for the critic networks
 tau: 0.005                      # Target network update coefficient (Polyak averaging)
 learn_alpha: true               # Whether to learn the temperature parameter α
 alpha: 0                        # Initial or fixed temperature parameter (if learn_alpha = false)
+
+mirror: true
+
+self_play:
+  enabled: true
+  mode: 2
+  min_epochs: 500
+  threshold: 4.0
+  switch_prob: 0.05
+  
+  # Paths for the agent to load at the start of self-play:
+  agent_checkpoint: "final_train/pink_01_perfalse.pth"
+  agent_config: "path/to/pretrained_agent_config.json"
+  
+  # Paths for the opponent if you want a pre-trained opponent:
+  opponent_checkpoint: "final_train/pink_01_perfalse.pth"
+  opponent_config: "path/to/pretrained_opponent_config.json"
+
+  # for mode: 2
+  wr_threshold: 0.95
+  n_update: 50  # sample a new opponent at each 5000 epochs

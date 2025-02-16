@@ -34,6 +34,7 @@ LOG_INTERVAL = config.get("log_interval", 20)
 OUTPUT_DIR = config.get("output_dir", "./results")
 DISCOUNT = config.get("discount", 0.99)
 BUFFER_SIZE = config.get("buffer_size", 1000000)
+MIRROR = config.get("mirror", False)
 
 # Noise parameters
 NOISE = config.get("noise", {})
@@ -54,22 +55,34 @@ KEEP_MODE = HOCKEY.get("keep_mode", False)
 EVAL_INTERVAL = config.get("eval_interval", 0)
 EVAL_EPISODES = config.get("eval_episodes", 1000)
 
-# New advanced parameters from YAML
+# Advanced parameters
 BATCH_SIZE = config.get("batch_size", 256)
 HIDDEN_SIZES_ACTOR = config.get("hidden_sizes_actor", [256, 256])
 HIDDEN_SIZES_CRITIC = config.get("hidden_sizes_critic", [256, 256])
 TAU = config.get("tau", 0.005)
 LEARN_ALPHA = config.get("learn_alpha", True)
 ALPHA = config.get("alpha", 0.2)
-
 USE_PER = config.get("use_per", False)
 USE_ERE = config.get("use_ere", False)
 PER_ALPHA = config.get("per_alpha", 0.6)
 PER_BETA = config.get("per_beta", 0.4)
 ERE_ETA0 = config.get("ere_eta0", 0.996)
 ERE_MIN_SIZE = config.get("ere_min_size", 2500)
-
 REWARD = config.get("reward", "basic")
+
+# [SELF-PLAY ADD] - Load self-play config section
+SP_CFG = config.get("self_play", {})
+SELF_PLAY_ENABLED = SP_CFG.get("enabled", False)
+SP_MIN_EPOCHS = SP_CFG.get("min_epochs", 3000)
+SP_THRESHOLD = SP_CFG.get("threshold", 4.0)
+SP_SWITCH_PROB = SP_CFG.get("switch_prob", 0.05)
+SP_AGENT_CHECKPOINT = SP_CFG.get("agent_checkpoint", "")
+SP_AGENT_CONFIG = SP_CFG.get("agent_config", "")
+SP_OPPONENT_CHECKPOINT = SP_CFG.get("opponent_checkpoint", "")
+SP_OPPONENT_CONFIG = SP_CFG.get("opponent_config", "")
+SELF_PLAY_MODE = SP_CFG.get("mode", 1)
+SP_WR_THRESHOLD = SP_CFG.get("wr_threshold", 0.95)
+SP_N_UPDATE = SP_CFG.get("n_update", 1000)
 
 # Ensure output directory exists
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -77,10 +90,13 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 CMD_EXTRA = ["--hockey_mode", HOCKEY_MODE, "--opponent_type", OPPONENT_TYPE]
 if KEEP_MODE:
     CMD_EXTRA.append("--keep_mode")
-    
+
+PY = "src/hockey_trainer.py"
+if SELF_PLAY_ENABLED:
+    PY = "src/self_play_trainer.py"
 # Construct the command to call your trainer
 CMD = [
-    "python", "src/hockey_trainer.py",
+    "python", PY,
     "--name", NAME,
     "--env_name", ENV_NAME,
     "--seed", str(SEED),
@@ -102,15 +118,13 @@ CMD = [
     "--eval_interval", str(EVAL_INTERVAL),
     "--eval_episodes", str(EVAL_EPISODES),
 
-    # Now pass the advanced parameters
     "--batch_size", str(BATCH_SIZE),
-    # We'll convert lists to comma-separated strings
     "--hidden_sizes_actor", ",".join(map(str, HIDDEN_SIZES_ACTOR)),
     "--hidden_sizes_critic", ",".join(map(str, HIDDEN_SIZES_CRITIC)),
     "--tau", str(TAU),
     "--learn_alpha", str(LEARN_ALPHA),
     "--alpha", str(ALPHA),
-    
+
     "--per_alpha", str(PER_ALPHA),
     "--per_beta", str(PER_BETA),
     "--ere_eta0", str(ERE_ETA0),
@@ -122,10 +136,35 @@ if USE_PER:
     CMD.append("--use_per")
 if USE_ERE:
     CMD.append("--use_ere")
+if MIRROR:
+    CMD.append("--mirror")
+
+# [SELF-PLAY ADD] - If self-play is enabled, add the appropriate arguments:
+if SELF_PLAY_ENABLED:
+    CMD.append("--self_play")
+    CMD += ["--sp_min_epochs", str(SP_MIN_EPOCHS)]
+    CMD += ["--sp_threshold", str(SP_THRESHOLD)]
+    CMD += ["--sp_switch_prob", str(SP_SWITCH_PROB)]
+    CMD += ["--sp_mode", str(SELF_PLAY_MODE)]
     
+    # If you have paths for agent/opponent, pass them along:
+    if SP_AGENT_CHECKPOINT:
+        CMD += ["--sp_agent_checkpoint", SP_AGENT_CHECKPOINT]
+    if SP_AGENT_CONFIG:
+        CMD += ["--sp_agent_config", SP_AGENT_CONFIG]
+    if SP_OPPONENT_CHECKPOINT:
+        CMD += ["--sp_opponent_checkpoint", SP_OPPONENT_CHECKPOINT]
+    if SP_OPPONENT_CONFIG:
+        CMD += ["--sp_opponent_config", SP_OPPONENT_CONFIG]
+    if SP_WR_THRESHOLD:
+        CMD += ["--sp_wr_threshold", str(SP_WR_THRESHOLD)]
+    if SP_N_UPDATE:
+        CMD += ["--sp_n_update", str(SP_N_UPDATE)]
+
 if JID:
     CMD += ["--id", JID]
 
+# print CMD
 process = subprocess.Popen(CMD, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 actual_id = JID if JID else str(process.pid)
 

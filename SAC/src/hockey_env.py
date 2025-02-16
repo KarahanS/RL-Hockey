@@ -1015,12 +1015,7 @@ class HockeyEnv(gym.Env, EzPickle):
     # 3) ADVANCED REWARD
     #    
     # --------------------------------------------------------------
-    def _get_reward_advanced(self, info: Dict[str, Any]) -> float:
-        pass  # implement this!
 
-    def _get_reward_advanced_two(self, info_two: Dict[str, Any]) -> float:
-        pass  # implement this!
-    
     def _get_reward_03(self, info: Dict[str, Any]) -> float:
         """
         A more nuanced reward for player one that augments the basic reward as follows:
@@ -1072,7 +1067,119 @@ class HockeyEnv(gym.Env, EzPickle):
                   + 0.15 * timing_bonus
                   + 1.0 * direction)
         return float(reward)
-    
+ 
+    def _get_reward_advanced(self, info: Dict[str, Any]) -> float:
+        # Base win/loss reward.
+        base = self._compute_reward()
+        
+        # Proxy rewards.
+        closeness = info["reward_closeness_to_puck"]
+        touch = info["reward_touch_puck"]
+        direction = info["reward_puck_direction"]
+        
+        # Progress toward the opponent's goal:
+        puck_progress = max(0, (self.puck.position[0] - CENTER_X) / (W / 2))
+        
+        # Sustained possession bonus.
+        sustained_possession = 0.1 * (self.player1_has_puck / MAX_TIME_KEEP_PUCK)
+        
+        # Shot quality computation:
+        vx, vy = self.puck.linearVelocity[0], self.puck.linearVelocity[1]
+        shot_speed = np.sqrt(vx * vx + vy * vy) / MAX_PUCK_SPEED  # normalized shot speed
+        theta_v = math.atan2(vy, vx)  # direction of the puck's velocity
+
+        # Compute the direction toward the goal.
+        goal_center = (W, CENTER_Y)  # assuming the opponent's goal is at (W, CENTER_Y)
+        dx = goal_center[0] - self.puck.position[0]
+        dy = goal_center[1] - self.puck.position[1]
+        theta_goal = math.atan2(dy, dx)
+        
+        # Angular error between shot direction and goal direction.
+        angle_error = abs(theta_v - theta_goal)
+        
+        # Adjust penalty for angular error based on proximity to the top or bottom wall.
+        # If the puck is near a wall, reduce the impact of the angle error (bank shot).
+        distance_to_wall = min(self.puck.position[1], H - self.puck.position[1])
+        threshold = H / 4  # threshold distance under which bank shots are likely
+        bank_factor = distance_to_wall / threshold if distance_to_wall < threshold else 1.0
+        
+        # Shot quality: higher when shot speed is high and the (weighted) angle error is low.
+        shot_quality = shot_speed * (1 - bank_factor * angle_error / math.pi)
+        
+        # Early touch bonus: incentivizes quick puck acquisition.
+        early_touch = touch * (self.max_timesteps - self.time) / self.max_timesteps
+        
+        # Combine all components with chosen weights.
+        reward = (
+            base +
+            0.3 * closeness +
+            3.0 * touch +
+            1.5 * direction +
+            2.0 * puck_progress +
+            sustained_possession +
+            1.5 * shot_quality +
+            0.5 * early_touch -
+            0.01  # small constant penalty for urgency
+        )
+        
+        return float(reward)
+
+    def _get_reward_advanced_two(self, info_two: Dict[str, Any]) -> float:
+        # Mirror the base win/loss reward.
+        base = -self._compute_reward()
+        
+        # Proxy rewards from info for player two.
+        closeness = info_two["reward_closeness_to_puck"]
+        touch = info_two["reward_touch_puck"]
+        direction = info_two["reward_puck_direction"]
+        
+        # For player two, progress is measured as how far the puck has moved toward the left side.
+        puck_progress = max(0, (CENTER_X - self.puck.position[0]) / (W / 2))
+        
+        # Sustained possession bonus for player two.
+        sustained_possession = 0.1 * (self.player2_has_puck / MAX_TIME_KEEP_PUCK)
+        
+        # Shot quality computation for player two:
+        vx, vy = self.puck.linearVelocity[0], self.puck.linearVelocity[1]
+        # Compute normalized shot speed (same for both players).
+        shot_speed = np.sqrt(vx * vx + vy * vy) / MAX_PUCK_SPEED  
+        theta_v = math.atan2(vy, vx)  # Direction of puck's velocity.
+        
+        # For player two, assume its goal is at the left side, i.e. at (0, CENTER_Y).
+        goal_center = (0, CENTER_Y)
+        dx = goal_center[0] - self.puck.position[0]
+        dy = goal_center[1] - self.puck.position[1]
+        theta_goal = math.atan2(dy, dx)
+        
+        # Angular error between the puck's velocity and the direction to player two's goal.
+        angle_error = abs(theta_v - theta_goal)
+        
+        # Adjust the angular error based on proximity to the top or bottom wall
+        # (to reduce penalty when bank shots are likely).
+        distance_to_wall = min(self.puck.position[1], H - self.puck.position[1])
+        threshold = H / 4  # Threshold distance below which bank shots are considered.
+        bank_factor = distance_to_wall / threshold if distance_to_wall < threshold else 1.0
+        
+        # Shot quality: higher when the puck moves fast and its (weighted) angular error is small.
+        shot_quality = shot_speed * (1 - bank_factor * angle_error / math.pi)
+        
+        # Early touch bonus: incentivizes acquiring the puck quickly.
+        early_touch = touch * (self.max_timesteps - self.time) / self.max_timesteps
+        
+        reward = (
+            base +
+            0.3 * closeness +
+            3.0 * touch +
+            1.5 * direction +
+            2.0 * puck_progress +
+            sustained_possession +
+            1.5 * shot_quality +
+            0.5 * early_touch -
+            0.01  # Small constant penalty to encourage urgency.
+        )
+        
+        return float(reward)
+       
     def get_reward(self, info: Dict[str, Any]) -> float:
         """Return the reward for player one (the 'main' agent)."""
         if self.reward == "basic":
