@@ -26,8 +26,8 @@ def running_mean(x, N):
     return (cumsum[N:] - cumsum[:-N]) / float(N)
 
 
-def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
-          plot_dir="./plots/", eval_freq=500, co_trained=False):
+def train(hparams, run_name, agent_type, action_space, model_dir="./models/",
+          skip_plot=False, plot_dir="./plots/", eval_freq=500, co_trained=False):
     # Load the environment
     env = h_env.HockeyEnv()
 
@@ -46,10 +46,17 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
         case _:
             raise ValueError(f"Invalid agent type: {agent_type}")
     
+    # Define action space
+    match action_space:
+        case "default":
+            action_space = env.discrete_action_space
+        case "custom":
+            action_space = CustomActionSpace()
+
     # TODO: Can we just explode the hparams dict here?
     agent_player = agent_class(
         env.observation_space,
-        CustomActionSpace(),  # env.discrete_action_space,
+        action_space,
         per=hparams["per"],
         hidden_sizes=hparams["hidden_sizes"],
         hidden_sizes_A=hparams["hidden_sizes_A"],
@@ -100,6 +107,7 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
     wandb_hparams = hparams.copy()
     wandb_hparams["agent_type"] = agent_type
     wandb_hparams["run_name"] = run_name
+    wandb_hparams["action_space"] = action_space
 
     # Define the rounds
     if co_trained:
@@ -116,6 +124,7 @@ def train(hparams, run_name, agent_type, model_dir="./models/", skip_plot=False,
     train_ddqn_agent_torch(
         agent_player,
         env,
+        action_space,
         model_dir=model_dir,
         max_steps=hparams["max_steps"],
         rounds=rounds,
@@ -179,6 +188,8 @@ if __name__ == "__main__":
     parser.add_argument("run_name", type=str, help="Name of the wandb run to log the training process")
     parser.add_argument("agent_type", type=str, help="Type of the agent to train",
                         choices=["dqn", "targ-dqn", "doub-dqn", "duel-dqn", "doub-duel-dqn"])
+    parser.add_argument("--action_space", type=str, default="default", help="Type of the action space to use",
+                        choices=["default", "custom"])
 
     # Agent hparam.s
     parser.add_argument("--model-dir", type=str, default="./models/",
@@ -241,6 +252,6 @@ if __name__ == "__main__":
     }
 
     # TODO: Support hparam search with appropriate run names
-    train(hparams, args.run_name, args.agent_type, model_dir=args.model_dir,
+    train(hparams, args.run_name, args.agent_type, args.action_space, model_dir=args.model_dir,
           skip_plot=args.skip_plot, plot_dir=args.plot_dir, eval_freq=args.eval_freq,
           co_trained=args.co_trained)

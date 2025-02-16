@@ -5,11 +5,12 @@ import time
 from enum import Enum
 from typing import Iterable
 from pathlib import Path
-from threading import Thread, Lock
+from threading import Thread, Lock, BoundedSemaphore
 
 import numpy as np
 import torch
 import wandb
+from gymnasium.spaces import Discrete
 
 root_dir = os.path.dirname(os.path.abspath("../"))
 if root_dir not in sys.path:
@@ -20,6 +21,9 @@ from DDQN.evaluation import compare_agents, display_stats
 from DDQN.DQN import DQNAgent
 from hockey.hockey_env import Mode as HockeyMode
 from hockey.hockey_env import HockeyEnv, BasicOpponent
+
+
+best_strong_winrate = 0.0
 
 
 class CustomHockeyMode(Enum):
@@ -79,15 +83,21 @@ class Stats:
         self.losses_training_stages = losses_ts
 
 
-def eval_task(agent_copy: DQNAgent, opps_dict_copy: dict, env_copy: HockeyEnv, curr_ep: int,
-              curr_round_ep: int, max_eps: int, eval_num_matches: int, wandb_hparams: dict,
-              print_lock: Lock, verbose=False):
+def eval_task(agent_copy: DQNAgent, opps_dict_copy: dict, env_copy: HockeyEnv,
+              action_space: Discrete | CustomActionSpace, curr_ep: int, curr_round_ep: int,
+              max_eps: int, eval_num_matches: int, wandb_hparams: dict, model_dir,
+              eval_semaphore: BoundedSemaphore, print_lock: Lock, best_save_lock: Lock,
+              verbose=False):
+    global best_strong_winrate
+    
     def eval_opp(agent_loc: DQNAgent, opp_loc: DQNAgent | BasicOpponent, name_loc: str,
                  env_loc: HockeyEnv):
+        global best_strong_winrate
+
         start = time.time()
 
         comp_stats = compare_agents(
-            agent_loc, opp_loc, env_loc, num_matches=eval_num_matches
+            agent_loc, opp_loc, env_loc, action_space, num_matches=eval_num_matches
         )
 
         win_rate_player = np.mean(comp_stats["winners"] == 1)
@@ -121,28 +131,41 @@ def eval_task(agent_copy: DQNAgent, opps_dict_copy: dict, env_copy: HockeyEnv, c
         
         end = time.time()
         print(f"Evaluated against {name_loc} in {(end - start):.2f} seconds")
+
+        if name_loc == "strong":
+            if win_rate_player > best_strong_winrate:
+                with best_save_lock:
+                    best_strong_winrate = win_rate_player
+
+                    for p in Path(model_dir).glob("Q_model_best_strong_ep*.ckpt"):
+                        p.unlink()
+                    agent_loc.save_state(os.path.join(
+                        model_dir,
+                        f"Q_model_best_strong_ep{curr_ep}_wr{win_rate_player}.ckpt"
+                    ))
     
-    env_copy.reset(HockeyMode.NORMAL)
-    for name, opp in opps_dict_copy.items():
-        eval_opp(agent_copy, opp, name, env_copy)
-    
-    # Opponent does not matter for the following modes
-    env_copy.reset(HockeyMode.TRAIN_SHOOTING)
-    eval_opp(agent_copy, next(iter(opps_dict_copy.values())), "Shooting Mode", env_copy)
-    env_copy.reset(HockeyMode.TRAIN_DEFENSE)
-    eval_opp(agent_copy, next(iter(opps_dict_copy.values())), "Defense Mode", env_copy)
+    with eval_semaphore:
+        env_copy.reset(HockeyMode.NORMAL)
+        for name, opp in opps_dict_copy.items():
+            eval_opp(agent_copy, opp, name, env_copy)
+        
+        # Opponent does not matter for the following modes
+        env_copy.reset(HockeyMode.TRAIN_SHOOTING)
+        eval_opp(agent_copy, next(iter(opps_dict_copy.values())), "Shooting Mode", env_copy)
+        env_copy.reset(HockeyMode.TRAIN_DEFENSE)
+        eval_opp(agent_copy, next(iter(opps_dict_copy.values())), "Defense Mode", env_copy)
 
-    del env_copy
-    del agent_copy
-    for o in opps_dict_copy:  # FIXME: no need for individual delete when FIXME in train_ddqn_agent_torch is fixed
-        temp = opps_dict_copy[o]
-        opps_dict_copy[o] = None
-        del temp
-    del opps_dict_copy
+        del env_copy
+        del agent_copy
+        for o in opps_dict_copy:  # FIXME: no need for individual delete when FIXME in train_ddqn_agent_torch is fixed
+            temp = opps_dict_copy[o]
+            opps_dict_copy[o] = None
+            del temp
+        del opps_dict_copy
 
 
-def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, model_dir: str, max_steps: int,
-                rounds: Iterable[Round], stats: Stats, eval_opps_dict: dict, ddqn_iter_fit=32,
+def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, action_space: Discrete | CustomActionSpace, model_dir: str,
+                max_steps: int, rounds: Iterable[Round], stats: Stats, eval_opps_dict: dict, ddqn_iter_fit=32,
                 eval_freq=500, eval_num_matches=1000, print_freq=25, tqdm=None, verbose=False,
                 wandb_hparams=None):
     """
@@ -151,6 +174,8 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, model_dir: str, max_
     Parameters:
     agent: the agent to train
     env: the environment to train in
+    action_space: the action space of the agent
+    model_dir: the directory to save the agent's model
     max_steps: the maximum number of steps to train for each episode
     rounds: describing the sequence of opponents to train against
     stats: object to store the statistics of the training process
@@ -158,8 +183,8 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, model_dir: str, max_
     ddqn_iter_fit: the number of iterations to train the DDQN agent for
     eval_freq: the episode frequency of evaluating the agent
     eval_num_matches: the number of matches to evaluate the agent for
-    tqdm: tqdm object (optional, for differentiating between notebook and console)
     print_freq: how often to print the current episode statistics
+    tqdm: tqdm object (optional, for differentiating between notebook and console)
     wandb_hparams: hyperparameters to log to wandb
     """
 
@@ -168,8 +193,11 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, model_dir: str, max_
         return torch.from_numpy(data).float().to(train_device)
     
     total_eps = 0
+
     eval_threads = []
     print_lock = Lock()
+    best_save_lock = Lock()
+    eval_semaphore = BoundedSemaphore(2)
 
     if wandb_hparams is not None:
         wandb_hparams["rounds"] = [str(r) for r in rounds]
@@ -220,6 +248,11 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, model_dir: str, max_
         if tqdm is None:
             tqdm = lambda x: x
 
+        if isinstance(action_space, CustomActionSpace):
+            discrete2cont = action_space.discrete_to_continuous
+        else:  # Discrete - use env's method
+            discrete2cont = env.discrete_to_continous_action
+
         for i in tqdm(range(max_ep)):
             total_reward = 0
             if train_opp:
@@ -236,10 +269,10 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, model_dir: str, max_
                 trunc = False
 
                 act_a1_discr = agent.act_torch(np2gpu(ob_a1), explore=True)  # int
-                act_a1 = CustomActionSpace.discrete_to_continuous(act_a1_discr)  # numpy array
+                act_a1 = discrete2cont(act_a1_discr)  # numpy array
                 if isinstance(agent_opp, DQNAgent):
                     act_a2_discr = agent_opp.act(ob_a2, explore=True)  # numpy array
-                    act_a2 = CustomActionSpace.discrete_to_continuous(act_a2_discr)  # numpy array
+                    act_a2 = discrete2cont(act_a2_discr)  # numpy array
                 else:
                     act_a2 = agent_opp.act(ob_a2)  # numpy array
 
@@ -338,9 +371,9 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, model_dir: str, max_
                 eval_thread = Thread(
                     target=eval_task,
                     args=(
-                        agent_copy, eval_opps_dict_copy, env_copy, total_eps, i, max_ep,
-                        (1000 if i == max_ep - 1 else eval_num_matches),
-                        wandb_hparams, print_lock, verbose
+                        agent_copy, eval_opps_dict_copy, env_copy, action_space, total_eps, i, max_ep,
+                        (1000 if i == max_ep - 1 else eval_num_matches), wandb_hparams, model_dir,
+                        eval_semaphore, print_lock, best_save_lock, verbose
                     )
                 )
                 eval_thread.start()
