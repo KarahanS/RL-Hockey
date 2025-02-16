@@ -64,6 +64,8 @@ def train(hparams, run_name, agent_type, action_space, model_dir="./models/",
         learning_rate=hparams["learning_rate"],
         discount=hparams["discount"],
         epsilon=hparams["epsilon"],
+        epsilon_decay_rate=hparams["epsilon_decay_rate"],
+        epsilon_min=hparams["epsilon_min"],
         update_target_freq=hparams["update_target_freq"],
         tau=hparams["tau"],
         use_torch=hparams["use_torch"]
@@ -107,7 +109,6 @@ def train(hparams, run_name, agent_type, action_space, model_dir="./models/",
     wandb_hparams = hparams.copy()
     wandb_hparams["agent_type"] = agent_type
     wandb_hparams["run_name"] = run_name
-    wandb_hparams["action_space"] = action_space
 
     # Define the rounds
     if co_trained:
@@ -188,7 +189,7 @@ if __name__ == "__main__":
     parser.add_argument("run_name", type=str, help="Name of the wandb run to log the training process")
     parser.add_argument("agent_type", type=str, help="Type of the agent to train",
                         choices=["dqn", "targ-dqn", "doub-dqn", "duel-dqn", "doub-duel-dqn"])
-    parser.add_argument("--action_space", type=str, default="default", help="Type of the action space to use",
+    parser.add_argument("--action-space", type=str, default="default", help="Type of the action space to use",
                         choices=["default", "custom"])
 
     # Agent hparam.s
@@ -205,7 +206,9 @@ if __name__ == "__main__":
                         help="Hidden layer sizes for the value stream in Dueling DQN")
     parser.add_argument("--lr", type=float, default=5e-5, help="Learning rate for the agent")
     parser.add_argument("--discount", type=float, default=0.99, help="Discount factor for the agent")
-    parser.add_argument("--epsilon", type=float, default=0.1, help="Exploration rate for the agent")
+    parser.add_argument("--epsilon", type=float, default=0.25, help="Exploration rate for the agent")
+    parser.add_argument("--epsilon-decay_rate", type=float, default=0.999, help="Decay rate of epsilon")
+    parser.add_argument("--epsilon-min", type=float, default=0.2, help="Minimum value of epsilon")
     parser.add_argument("--update-target-freq", type=int, default=1000,
                         help="Frequency of updating the target network")
     parser.add_argument("--tau", type=float, default=1e-4, help="Soft update parameter for the target network")
@@ -217,7 +220,7 @@ if __name__ == "__main__":
     # Training hparam.s
     parser.add_argument("--ddqn-iter-fit", type=int, default=32, help="Number of iterations to train the DDQN agent"
                         " for each episode")
-    parser.add_argument("--long-round-ep", type=int, default=100_000, help="Number of episodes for the long round")
+    parser.add_argument("--long-round-ep", type=int, default=20_000, help="Number of episodes for the long round")
     parser.add_argument("--print-freq", type=int, default=25, help="Frequency of printing the training statistics")
     parser.add_argument("--skip-plot", action="store_true", help="Skip plotting the training statistics")
     parser.add_argument("--eval-freq", type=int, default=10_000, help="Frequency of evaluating the agent")
@@ -231,12 +234,15 @@ if __name__ == "__main__":
     hparams = {
         # Agent hparam.s
         "per": args.per,
+        "action_space": args.action_space,
         "hidden_sizes": args.hidden_sizes,
         "hidden_sizes_A": args.hidden_sizes_A,
         "hidden_sizes_V": args.hidden_sizes_V,
         "learning_rate": args.lr,
         "discount": args.discount,
         "epsilon": args.epsilon,
+        "epsilon_decay_rate": args.epsilon_decay_rate,
+        "epsilon_min": args.epsilon_min,
         "update_target_freq": args.update_target_freq,
         "tau": args.tau,
         "use_torch": not args.use_numpy,

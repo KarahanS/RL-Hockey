@@ -30,7 +30,9 @@ class DQNAgent(object):
         self._action_space = action_space
         self._action_n = action_space.n
         self._config = {
-            "eps": 0.05,  # Epsilon in epsilon greedy policies
+            "epsilon": 0.2,  # Epsilon in epsilon greedy policies
+            "epsilon_decay_rate": 0.999,
+            "epsilon_min": 0.1,
             "hidden_sizes": [128, 128],
             "discount": 0.95,
             "buffer_size": int(1e5),
@@ -38,7 +40,9 @@ class DQNAgent(object):
             "learning_rate": 0.0002,
         }
         self._config.update(userconfig)
-        self._eps = self._config['eps']
+        self.eps = self._config['epsilon']
+        self._eps_decay_rate = self._config['epsilon_decay_rate']
+        self._eps_min = self._config['epsilon_min']
         self._batch_size = self._config['batch_size']
         
         self._per = self._config.get("per", False)
@@ -67,14 +71,11 @@ class DQNAgent(object):
     # TODO: If the server allows so, deprecate numpy-only alternatives and rename the torch
     #   versions to the original names
 
-    def act(self, observation: np.ndarray, eps=None, explore=False):
+    def act(self, observation: np.ndarray, explore=False):
         """explore: Allow action exploration. Should not use in evaluation"""
-
-        if eps is None:
-            eps = self._eps
         
         # Epsilon greedy
-        if (not explore) or np.random.random() > eps:
+        if (not explore) or np.random.random() > self.eps:
             # Greedy action
             action = self.Q.greedyAction(observation)
         else:
@@ -83,14 +84,11 @@ class DQNAgent(object):
         
         return action
     
-    def act_torch(self, observation: torch.Tensor, eps=None, explore=False):
+    def act_torch(self, observation: torch.Tensor, explore=False):
         """explore: Allow action exploration. Should not use in evaluation"""
-
-        if eps is None:
-            eps = self._eps
         
         # Epsilon greedy
-        if (not explore) or np.random.random() > eps:
+        if (not explore) or np.random.random() > self.eps:
             # Greedy action
             action = self.Q.greedyAction_torch(observation)
         else:
@@ -150,6 +148,9 @@ class DQNAgent(object):
             fit_loss = self.Q.fit(s, a, td_target)
             losses.append(fit_loss)
         
+        # Decay epsilon
+        self.eps = max(self._eps_min, self.eps * self._eps_decay_rate)
+
         return losses
 
     def train_torch(self, iter_fit=32):
@@ -176,6 +177,9 @@ class DQNAgent(object):
                 priorities = torch.abs(td_target - q_value) + self.buffer.epsilon
                 self.buffer.update_priorities(indices, priorities.flatten())
         
+        # Decay epsilon
+        self.eps = max(self._eps_min, self.eps * self._eps_decay_rate)
+
         return losses
 
     def save_state(self, save_path):
@@ -274,6 +278,9 @@ class TargetDQNAgent(DQNAgent):
             fit_loss = self.Q.fit(s, a, td_objective)
             losses.append(fit_loss)
 
+        # Decay epsilon
+        self.eps = max(self._eps_min, self.eps * self._eps_decay_rate)
+
         return losses
 
     def train_torch(self, iter_fit=32):
@@ -302,6 +309,9 @@ class TargetDQNAgent(DQNAgent):
                 #priorities = torch.abs(fit_loss.flatten()) + self.buffer.epsilon
                 priorities = torch.abs(td_objective - q_value) + self.buffer.epsilon
                 self.buffer.update_priorities(indices, priorities.flatten())
+        
+        # Decay epsilon
+        self.eps = max(self._eps_min, self.eps * self._eps_decay_rate)
 
         return losses
 

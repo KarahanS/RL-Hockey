@@ -271,7 +271,7 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, action_space: Discre
                 act_a1_discr = agent.act_torch(np2gpu(ob_a1), explore=True)  # int
                 act_a1 = discrete2cont(act_a1_discr)  # numpy array
                 if isinstance(agent_opp, DQNAgent):
-                    act_a2_discr = agent_opp.act(ob_a2, explore=True)  # numpy array
+                    act_a2_discr = agent_opp.act(ob_a2, explore=True)  # int
                     act_a2 = discrete2cont(act_a2_discr)  # numpy array
                 else:
                     act_a2 = agent_opp.act(ob_a2)  # numpy array
@@ -316,6 +316,7 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, action_space: Discre
                     "episode": total_eps,
                     "return": total_reward,
                     "loss": fit_loss[-1],
+                    "epsilon": agent.eps,
                     "steps": t+1
                 }
                 
