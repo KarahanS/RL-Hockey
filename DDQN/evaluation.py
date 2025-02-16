@@ -2,17 +2,20 @@ import os
 import sys
 
 import numpy as np
+from gymnasium.spaces import Discrete
 
 root_dir = os.path.dirname(os.path.abspath("./"))
 if root_dir not in sys.path:
     sys.path.append(root_dir)
 
+from DDQN.action_space import CustomActionSpace
 from DDQN.DQN import DQNAgent
 from hockey.hockey_env import HockeyEnv, BasicOpponent
 
 
 def compare_agents(agent_player: DQNAgent, agent_opp: DQNAgent | BasicOpponent, env: HockeyEnv,
-                   num_matches=100, render=False, tqdm=None, seed=42):
+                   action_space: Discrete | CustomActionSpace, num_matches=100, render=False,
+                   tqdm=None, seed=42):
     """
     Play a number of matches between two agents, display and return statistics
 
@@ -20,6 +23,7 @@ def compare_agents(agent_player: DQNAgent, agent_opp: DQNAgent | BasicOpponent, 
     agent_player: the agent to play as the player
     agent_opponent: the agent to play as the opponent
     env: the environment to train in
+    action_space: the chosen action space
     num_matches: the number of matches to play
     render: whether to render the environment
     tqdm: tqdm object (optional, for differentiating between notebook and console)
@@ -45,6 +49,11 @@ def compare_agents(agent_player: DQNAgent, agent_opp: DQNAgent | BasicOpponent, 
     if tqdm is None:
         tqdm = lambda x: x
 
+    if isinstance(action_space, CustomActionSpace):
+        discrete2cont = action_space.discrete_to_continuous
+    else:  # Discrete - use env's method
+        discrete2cont = env.discrete_to_continous_action
+
     for _ in tqdm(range(num_matches)):
         done = False
         trunc = False
@@ -56,10 +65,10 @@ def compare_agents(agent_player: DQNAgent, agent_opp: DQNAgent | BasicOpponent, 
                 env.render()
             
             a1_discr = agent_player.act(obs)
-            a1 = env.discrete_to_continous_action(a1_discr)
+            a1 = discrete2cont(a1_discr)
             a2 = agent_opp.act(obs_opp)
             if isinstance(agent_opp, DQNAgent):
-                a2 = env.discrete_to_continous_action(a2)
+                a2 = discrete2cont(a2)
 
             obs, reward, done, trunc, info_player = env.step(np.hstack([a1, a2]))
             info_opp = env.get_info_agent_two()

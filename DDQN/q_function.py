@@ -55,9 +55,12 @@ class QFunction(Feedforward):
         )
         self.loss = torch.nn.SmoothL1Loss()  # MSELoss()
 
-    # FIXME: CPU training functions will give device errors since Q can be on GPU
+    # FIXME: CPU training functions will give device errors since Q can only be on GPU
 
-    def fit(self, observations, actions, targets):
+    def fit(self, observations, actions, targets, loss_weights=None):
+        if loss_weights is not None:
+            raise NotImplementedError("Loss weights are not supported in CPU training. Is PER active?")
+
         self.train() # put model in training mode
         self.optimizer.zero_grad()
         # Forward pass
@@ -68,6 +71,7 @@ class QFunction(Feedforward):
 
         # Compute Loss
         loss = self.loss(pred, torch.from_numpy(targets).float())
+        loss = loss.mean()
         
         # Backward pass
         loss.backward()
@@ -75,13 +79,16 @@ class QFunction(Feedforward):
 
         return loss.item()
 
-    def fit_torch(self, observations, actions, targets):
+    def fit_torch(self, observations, actions, targets, loss_weights=None):
         self.train() # put model in training mode
         self.optimizer.zero_grad()
         # Forward pass
         pred = self.Q_value(observations, actions)
         # Compute Loss
         loss = self.loss(pred, targets)
+        if loss_weights is not None:
+            loss = loss * loss_weights
+        loss = loss.mean()
 
         # Backward pass
         loss.backward()

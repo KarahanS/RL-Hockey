@@ -11,7 +11,7 @@ if root_dir not in sys.path:
     sys.path.append(root_dir)
 
 from DDQN.q_function import QFunction
-from DDQN.memory import Memory, MemoryTorch
+from DDQN.memory import Memory, MemoryTorch, MemoryPERTorch
 
 
 class DQNAgent(object):
@@ -30,7 +30,9 @@ class DQNAgent(object):
         self._action_space = action_space
         self._action_n = action_space.n
         self._config = {
-            "eps": 0.05,  # Epsilon in epsilon greedy policies
+            "epsilon": 0.2,  # Epsilon in epsilon greedy policies
+            "epsilon_decay_rate": 0.999,
+            "epsilon_min": 0.1,
             "hidden_sizes": [128, 128],
             "discount": 0.95,
             "buffer_size": int(1e5),
@@ -38,9 +40,12 @@ class DQNAgent(object):
             "learning_rate": 0.0002,
         }
         self._config.update(userconfig)
-        self._eps = self._config['eps']
+        self.eps = self._config['epsilon']
+        self._eps_decay_rate = self._config['epsilon_decay_rate']
+        self._eps_min = self._config['epsilon_min']
         self._batch_size = self._config['batch_size']
         
+        self._per = self._config.get("per", False)
         self._use_torch = self._config.get("use_torch", False)
         
         # Q Network
@@ -54,19 +59,23 @@ class DQNAgent(object):
 
         self.train_device = self.Q.device
         if self._use_torch:
-            self.buffer = MemoryTorch(max_size=self._config["buffer_size"], device=self.train_device)
+            if self._per:
+                self.buffer = MemoryPERTorch(max_size=self._config["buffer_size"], device=self.train_device)
+            else:
+                self.buffer = MemoryTorch(max_size=self._config["buffer_size"], device=self.train_device)
         else:
+            if self._per:
+                raise NotImplementedError("PER is not implemented for numpy version")
             self.buffer = Memory(max_size=self._config["buffer_size"])
 
     # TODO: If the server allows so, deprecate numpy-only alternatives and rename the torch
     #   versions to the original names
 
-    def act(self, observation: np.ndarray, eps=None):
-        if eps is None:
-            eps = self._eps
+    def act(self, observation: np.ndarray, explore=False):
+        """explore: Allow action exploration. Should not use in evaluation"""
         
         # Epsilon greedy
-        if np.random.random() > eps:
+        if (not explore) or np.random.random() > self.eps:
             # Greedy action
             action = self.Q.greedyAction(observation)
         else:
@@ -75,12 +84,11 @@ class DQNAgent(object):
         
         return action
     
-    def act_torch(self, observation: torch.Tensor, eps=None):
-        if eps is None:
-            eps = self._eps
+    def act_torch(self, observation: torch.Tensor, explore=False):
+        """explore: Allow action exploration. Should not use in evaluation"""
         
         # Epsilon greedy
-        if np.random.random() > eps:
+        if (not explore) or np.random.random() > self.eps:
             # Greedy action
             action = self.Q.greedyAction_torch(observation)
         else:
@@ -127,17 +135,22 @@ class DQNAgent(object):
         return s, a, td_target
 
     def train(self, iter_fit=32):
-        losses = []
+        if self._per:
+            raise NotImplementedError("PER is not implemented for numpy version")
 
+        losses = []
         for _ in range(iter_fit):
             # Sample from the replay buffer
-            data = self.buffer.sample(batch=self._batch_size)
+            data = self.buffer.sample(batch_size=self._batch_size)
             s, a, td_target = self._training_objective(data)
-            
+
             # Optimize the lsq objective
             fit_loss = self.Q.fit(s, a, td_target)
             losses.append(fit_loss)
         
+        # Decay epsilon
+        self.eps = max(self._eps_min, self.eps * self._eps_decay_rate)
+
         return losses
 
     def train_torch(self, iter_fit=32):
@@ -145,27 +158,42 @@ class DQNAgent(object):
 
         for _ in range(iter_fit):
             # Sample from the replay buffer
-            data = self.buffer.sample(batch=self._batch_size)
-            s, a, td_target = self._training_objective_torch(data)
+            data = self.buffer.sample(batch_size=self._batch_size)
+            s, a, td_target = self._training_objective_torch(data[:5])
             
-            # optimize the lsq objective
-            fit_loss = self.Q.fit_torch(s, a, td_target)
+            if self._per:
+                loss_weights = data[5]
+                indices = data[6]
+                q_value = self.Q.Q_value(s, a)
+            else:
+                loss_weights = None
+
+            # Optimize the lsq objective
+            fit_loss = self.Q.fit_torch(s, a, td_target, loss_weights)
             losses.append(fit_loss)
+
+            if self._per:
+                #priorities = torch.abs(fit_loss.flatten()) + self.buffer.epsilon
+                priorities = torch.abs(td_target - q_value) + self.buffer.epsilon
+                self.buffer.update_priorities(indices, priorities.flatten())
         
+        # Decay epsilon
+        self.eps = max(self._eps_min, self.eps * self._eps_decay_rate)
+
         return losses
 
-    def save_state(self, save_dir, filename="Q_model.ckpt"):
+    def save_state(self, save_path):
+        save_dir = os.path.dirname(save_path)
+
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
         
-        torch.save(
-            self.Q.state_dict(),
-            os.path.join(save_dir, filename)
-        )
+        torch.save(self.Q.state_dict(), save_path)
 
-    def load_state(self, load_dir):
+    def load_state(self, load_path):  # TODO: merge args
         self.Q.load_state_dict(
-            torch.load(os.path.join(load_dir, "Q_model.ckpt"), weights_only=True)
+            #torch.load(os.path.join(load_dir, filename), weights_only=True)
+            torch.load(load_path, weights_only=True)
         )
 
 
@@ -233,6 +261,9 @@ class TargetDQNAgent(DQNAgent):
         return s, a, td_target
 
     def train(self, iter_fit=32):
+        if self._per:
+            raise NotImplementedError("PER is not implemented for numpy version")
+
         losses = []
         self.train_iter += 1
         if self.train_iter % self._config["update_target_every"] == 0:
@@ -240,12 +271,15 @@ class TargetDQNAgent(DQNAgent):
 
         for _ in range(iter_fit):
             # Sample from the replay buffer
-            data = self.buffer.sample(batch=self._batch_size)
+            data = self.buffer.sample(batch_size=self._batch_size)
             s, a, td_objective = self._training_objective(data)
             
             # Optimize the lsq objective
             fit_loss = self.Q.fit(s, a, td_objective)
             losses.append(fit_loss)
+
+        # Decay epsilon
+        self.eps = max(self._eps_min, self.eps * self._eps_decay_rate)
 
         return losses
 
@@ -257,12 +291,27 @@ class TargetDQNAgent(DQNAgent):
 
         for _ in range(iter_fit):
             # Sample from the replay buffer
-            data = self.buffer.sample(batch=self._batch_size)
-            s, a, td_objective = self._training_objective_torch(data)
+            data = self.buffer.sample(batch_size=self._batch_size)
+            s, a, td_objective = self._training_objective_torch(data[:5])
+
+            if self._per:
+                loss_weights = data[5]
+                indices = data[6]
+                q_value = self.Q.Q_value(s, a)
+            else:
+                loss_weights = None
             
             # Optimize the lsq objective
-            fit_loss = self.Q.fit_torch(s, a, td_objective)
+            fit_loss = self.Q.fit_torch(s, a, td_objective, loss_weights)
             losses.append(fit_loss)
+
+            if self._per:
+                #priorities = torch.abs(fit_loss.flatten()) + self.buffer.epsilon
+                priorities = torch.abs(td_objective - q_value) + self.buffer.epsilon
+                self.buffer.update_priorities(indices, priorities.flatten())
+        
+        # Decay epsilon
+        self.eps = max(self._eps_min, self.eps * self._eps_decay_rate)
 
         return losses
 
