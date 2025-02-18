@@ -26,7 +26,7 @@ def running_mean(x, N):
     return (cumsum[N:] - cumsum[:-N]) / float(N)
 
 
-def train(hparams, run_name, agent_type, action_space, model_dir="./models/",
+def train(hparams, run_name, agent_type, action_space, model_dir="./models/", model_init_ckpt=None,
           skip_plot=False, plot_dir="./plots/", eval_freq=500, co_trained=False):
     # Load the environment
     env = h_env.HockeyEnv()
@@ -70,6 +70,10 @@ def train(hparams, run_name, agent_type, action_space, model_dir="./models/",
         tau=hparams["tau"],
         use_torch=hparams["use_torch"]
     )
+
+    # Load the model weights if continuing from a previous run
+    if model_init_ckpt is not None:
+        agent_player.load_state(model_init_ckpt)
 
     # Define the opponent(s)
     agent_opp_weak = h_env.BasicOpponent(weak=True)
@@ -193,6 +197,8 @@ if __name__ == "__main__":
                         choices=["default", "custom"])
 
     # Agent hparam.s
+    parser.add_argument("--continue-from", type=str, default=None,
+                        help="Path to the model weights to continue training from")
     parser.add_argument("--model-dir", type=str, default="./models/",
                         help="Directory to save the trained model weights")
     parser.add_argument("--plot-dir", type=str, default="./plots/",
@@ -259,5 +265,6 @@ if __name__ == "__main__":
 
     # TODO: Support hparam search with appropriate run names
     train(hparams, args.run_name, args.agent_type, args.action_space, model_dir=args.model_dir,
-          skip_plot=args.skip_plot, plot_dir=args.plot_dir, eval_freq=args.eval_freq,
-          co_trained=args.co_trained)
+          model_init_ckpt=args.continue_from,
+          skip_plot=args.skip_plot, plot_dir=args.plot_dir,
+          eval_freq=args.eval_freq, co_trained=args.co_trained)
