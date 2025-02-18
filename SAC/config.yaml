@@ -1,10 +1,10 @@
 # Run name
-name: "pink_advanced_200Ktotal_pob_npdate50_wr:0.95"
+name: "PINK_from[champion_9000]_01_200K_POB_npdate50_wr:0.95_[train defense+shooting]"
 
 # Environment and seed
 env_name: "Hockey"   # The Gym environment to train on ("Hockey-v0", "Hockey-One-v0", etc.)
 seed: 42                # Random seed for reproducibility
-reward: "advanced"
+reward: "01"
 
 # Learning rates and training loops
 lr: 0.001             # Learning rate used by both actor and critic optimizers
@@ -62,19 +62,27 @@ mirror: true
 
 self_play:
   enabled: true
-  mode: 2
+  load: true
+  mode: 4
+
   min_epochs: 500
   threshold: 4.0
   switch_prob: 0.05
-  
-  # Paths for the agent to load at the start of self-play:
-  agent_checkpoint: "final_train/pink_01_perfalse.pth"
-  agent_config: "path/to/pretrained_agent_config.json"
-  
-  # Paths for the opponent if you want a pre-trained opponent:
-  opponent_checkpoint: "final_train/pink_01_perfalse.pth"
-  opponent_config: "path/to/pretrained_opponent_config.json"
 
-  # for mode: 2
+  # The main agent to load (optional):
+  agent_checkpoint: "/home/stud438/RL-Hockey/SAC/pob/champion.pth"
+  agent_config: "path/to/pretrained_agent_config.json"
+
+  # For "mode:3", we define a second agent:
+  # Because "opponent_type" might be "sac", "td3", etc.
+  # If it's "sac", we use sp_opponent_checkpoint + sp_opponent_config.
+  opponent_type: "sac"            # or "td3" or "weak" or "strong" etc.
+  opponent_checkpoint: "final_train/PINK_01_STRONG.pth"
+  opponent_config: "path/to/my_opponent_config.json"
+  
+  # for mode: 4
+  opponents_folder: "/home/stud438/RL-Hockey/SAC/pob"
+
+  # for mode:2 (already there)
   wr_threshold: 0.95
-  n_update: 50  # sample a new opponent at each 5000 epochs
+  n_update: 50

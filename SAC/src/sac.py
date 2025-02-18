@@ -356,6 +356,7 @@ class SACAgent:
         self.critic2.load_state_dict(state[2])
         self.critic1_target.load_state_dict(state[1])
         self.critic2_target.load_state_dict(state[2])
+        
 
     def restore_full_state(self, checkpoint):
         """Restore as many of the saved elements as are present in the checkpoint."""
@@ -439,4 +440,3 @@ class SACAgent:
             self.buffer.set_state(buffer_state)
         else:
             print("[SACAgent] 'buffer_state' missing or buffer has no set_state().")
-

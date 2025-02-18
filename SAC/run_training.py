@@ -80,9 +80,12 @@ SP_AGENT_CHECKPOINT = SP_CFG.get("agent_checkpoint", "")
 SP_AGENT_CONFIG = SP_CFG.get("agent_config", "")
 SP_OPPONENT_CHECKPOINT = SP_CFG.get("opponent_checkpoint", "")
 SP_OPPONENT_CONFIG = SP_CFG.get("opponent_config", "")
+OPPONENT_TYPE = HOCKEY.get("opponent_type", "none")
 SELF_PLAY_MODE = SP_CFG.get("mode", 1)
 SP_WR_THRESHOLD = SP_CFG.get("wr_threshold", 0.95)
 SP_N_UPDATE = SP_CFG.get("n_update", 1000)
+SP_LOAD = SP_CFG.get("load", False)
+SP_OPPONENTS_FOLDER = SP_CFG.get("opponents_folder", "pob")
 
 # Ensure output directory exists
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -146,8 +149,8 @@ if SELF_PLAY_ENABLED:
     CMD += ["--sp_threshold", str(SP_THRESHOLD)]
     CMD += ["--sp_switch_prob", str(SP_SWITCH_PROB)]
     CMD += ["--sp_mode", str(SELF_PLAY_MODE)]
+    CMD += ["--sp_opponents_folder", SP_OPPONENTS_FOLDER]
     
-    # If you have paths for agent/opponent, pass them along:
     if SP_AGENT_CHECKPOINT:
         CMD += ["--sp_agent_checkpoint", SP_AGENT_CHECKPOINT]
     if SP_AGENT_CONFIG:
@@ -160,6 +163,8 @@ if SELF_PLAY_ENABLED:
         CMD += ["--sp_wr_threshold", str(SP_WR_THRESHOLD)]
     if SP_N_UPDATE:
         CMD += ["--sp_n_update", str(SP_N_UPDATE)]
+    if SP_LOAD:
+        CMD += ["--sp_load"]
 
 if JID:
     CMD += ["--id", JID]
