@@ -38,11 +38,11 @@ def main():
     #agent1_checkpoint = "td3_models/td3_vs_selfplay_v2/TD3_Hockey_self_play_seed_700_final.pth"
 
     agent1_config = "final_train/config.json"
-    agent1_checkpoint = "final_train/PINK_01_STRONG.pth"
+    agent1_checkpoint = "final_train/PINK_01_WEAK_SELFPLAY_MODE1_1000_TH4_MIRROR.pth"
     
     # For agent2, you can use either SAC or TD3 or a built-in type.
     agent2_config = "final_train/config.json"
-    agent2_checkpoint = "final_train/PINK_01_WEAK_SELFPLAY_MODE1_6000_TH4_MIRROR.pth"
+    agent2_checkpoint = "final_train/PINK_01_STRONG.pth"
 
     # For a TD3 example: "pth/td3_self_play/TD3_Hockey_self_play_seed_700_final"
 
@@ -58,7 +58,7 @@ def main():
     else:
         print("Agent2 (Built-in):", agent2_config, agent2_checkpoint)
 
-    eval_episodes = 10000  # Number of evaluation episodes
+    eval_episodes = 1000  # Number of evaluation episodes
     env_mode = "NORMAL"   # Could be TRAIN_SHOOTING, TRAIN_DEFENSE, etc.
     render = False
 

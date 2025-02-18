@@ -1753,6 +1753,16 @@ try:
         entry_point="src.hockey_env:HockeyEnv_BasicOpponent",  # <-- changed!
         kwargs={"mode": 0, "weak_opponent": False},
     )
+    register(
+        id="Hockey-Better-v0",
+        entry_point="src.hockey_env:HockeyEnv_BetterOpponent",
+        kwargs={"mode": 0, "advanced": False},
+    )
+    register(
+        id="Hockey-Advanced-v0",
+        entry_point="src.hockey_env:HockeyEnv_BetterOpponent",
+        kwargs={"mode": 0, "advanced": True},
+    )
 except Exception as e:
     print(e)
 
