@@ -27,7 +27,7 @@ class DQNAgent(object):
                                    ' (Reqire Discrete.)'.format(action_space, self))
 
         self._observation_space = observation_space
-        self._action_space = action_space
+        self.action_space = action_space
         self._action_n = action_space.n
         self._config = {
             "epsilon": 0.2,  # Epsilon in epsilon greedy policies
@@ -80,7 +80,7 @@ class DQNAgent(object):
             action = self.Q.greedyAction(observation)
         else:
             # Random action
-            action = self._action_space.sample()
+            action = self.action_space.sample()
         
         return action
     
@@ -93,7 +93,7 @@ class DQNAgent(object):
             action = self.Q.greedyAction_torch(observation)
         else:
             # Random action
-            action = self._action_space.sample()
+            action = self.action_space.sample()
         
         return action
     

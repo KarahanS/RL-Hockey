@@ -19,8 +19,9 @@ import sys
 sys.path.append("../")  # Adjust if needed so that TD3, etc. are importable.
 
 
-from DDQN.DDQN import DoubleDuelingDQNAgent
-from DDQN.action_space import CustomActionSpace
+from DDQN.DDQN import DuelingDQNAgent, DoubleDuelingDQNAgent
+from DDQN.DQN import DQNAgent, TargetDQNAgent, DoubleDQNAgent
+from DDQN.dqn_action_space import CustomActionSpace
 from TD3.src.td3 import TD3  # your TD3 implementation
 import argparse
 import torch
@@ -207,9 +208,15 @@ def evaluate_agents(agent1, agent2, env, eval_episodes=100, render=False):
             elif isinstance(agent1, TD3):
                 # Evaluate with no noise
                 action1 = agent1.act(obs, add_noise=False)
-            elif isinstance(agent1, DoubleDuelingDQNAgent):
+            elif isinstance(agent1, DQNAgent):
                 action1_discrete  = agent1.act_torch(np2gpu(obs))  # int
-                action1 = env.discrete_to_continous_action(action1_discrete)  # numpy array
+
+                if isinstance(agent1.action_space, CustomActionSpace):
+                    discrete2cont = CustomActionSpace.discrete_to_continuous
+                else:
+                    discrete2cont = env.discrete_to_continous_action
+                
+                action1 = discrete2cont(action1_discrete)  # numpy array
             else:
                 # Possibly a custom or dummy agent
                 try:
@@ -222,9 +229,15 @@ def evaluate_agents(agent1, agent2, env, eval_episodes=100, render=False):
                 action2 = agent2.act(opp_obs, eval_mode=True)
             elif isinstance(agent2, TD3):
                 action2 = agent2.act(opp_obs, add_noise=False)
-            elif isinstance(agent2, DoubleDuelingDQNAgent):
+            elif isinstance(agent2, DQNAgent):
                 action2_discrete  = agent2.act_torch(np2gpu(obs))  # int
-                action2 = env.discrete_to_continous_action(action2_discrete)  # numpy array
+                
+                if isinstance(agent2.action_space, CustomActionSpace):
+                    discrete2cont = CustomActionSpace.discrete_to_continuous
+                else:
+                    discrete2cont = env.discrete_to_continous_action
+                
+                action2 = discrete2cont(action2_discrete)  # numpy array
             else:
                 try:
                     action2 = agent2.act(opp_obs, eval_mode=True)
