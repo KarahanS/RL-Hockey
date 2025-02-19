@@ -36,7 +36,7 @@ class DQNAgent(object):
             "hidden_sizes": [128, 128],
             "discount": 0.95,
             "buffer_size": int(1e5),
-            "batch_size": 128,
+            "batch_size": 256,
             "learning_rate": 0.0002,
         }
         self._config.update(userconfig)

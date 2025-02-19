@@ -118,6 +118,7 @@ def train(hparams, run_name, agent_type, action_space, model_dir="./models/", mo
         hidden_sizes_A=hparams["hidden_sizes_A"],
         hidden_sizes_V=hparams["hidden_sizes_V"],
         learning_rate=hparams["learning_rate"],
+        batch_size=hparams["batch_size"],
         discount=hparams["discount"],
         epsilon=hparams["epsilon"],
         epsilon_decay_rate=hparams["epsilon_decay_rate"],
@@ -258,6 +259,7 @@ if __name__ == "__main__":
     parser.add_argument("--hidden-sizes-V", type=int, nargs="+", default=[512, 512],
                         help="Hidden layer sizes for the value stream in Dueling DQN")
     parser.add_argument("--lr", type=float, default=5e-5, help="Learning rate for the agent")
+    parser.add_argument("--batch-size", type=int, default=256, help="Batch size for training the agent")
     parser.add_argument("--discount", type=float, default=0.99, help="Discount factor for the agent")
     parser.add_argument("--epsilon", type=float, default=0.25, help="Exploration rate for the agent")
     parser.add_argument("--epsilon-decay_rate", type=float, default=0.999, help="Decay rate of epsilon")
@@ -292,6 +294,7 @@ if __name__ == "__main__":
         "hidden_sizes_A": args.hidden_sizes_A,
         "hidden_sizes_V": args.hidden_sizes_V,
         "learning_rate": args.lr,
+        "batch_size": args.batch_size,
         "discount": args.discount,
         "epsilon": args.epsilon,
         "epsilon_decay_rate": args.epsilon_decay_rate,

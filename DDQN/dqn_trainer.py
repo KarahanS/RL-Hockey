@@ -29,7 +29,7 @@ from SAC.src.sac import SACAgent
 
 
 best_strong_winrate = 0.0
-MAX_EVAL_THREADS = 1
+MAX_EVAL_THREADS = 4
 
 
 class CustomHockeyMode(Enum):
