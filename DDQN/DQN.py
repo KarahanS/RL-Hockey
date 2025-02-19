@@ -10,8 +10,8 @@ root_dir = os.path.dirname(os.path.abspath("./"))
 if root_dir not in sys.path:
     sys.path.append(root_dir)
 
-from DDQN.q_function import QFunction
-from DDQN.memory import Memory, MemoryTorch, MemoryPERTorch
+from DDQN.dqn_q_function import QFunction
+from DDQN.dqn_memory import Memory, MemoryTorch, MemoryPERTorch
 
 
 class DQNAgent(object):

@@ -13,14 +13,18 @@ import wandb
 from gymnasium.spaces import Discrete
 
 root_dir = os.path.dirname(os.path.abspath("../"))
+sac_dir = os.path.join(root_dir, "SAC/src/")
 if root_dir not in sys.path:
     sys.path.append(root_dir)
+if sac_dir not in sys.path:
+    sys.path.append(sac_dir)
 
-from DDQN.action_space import CustomActionSpace
-from DDQN.evaluation import compare_agents, display_stats
+from DDQN.dqn_action_space import CustomActionSpace
+from DDQN.dqn_evaluation import compare_agents, display_stats
 from DDQN.DQN import DQNAgent
 from hockey.hockey_env import Mode as HockeyMode
 from hockey.hockey_env import HockeyEnv, BasicOpponent
+from SAC.src.sac import SACAgent
 
 
 best_strong_winrate = 0.0
@@ -49,6 +53,18 @@ class RandomWeaknessBasicOpponent(BasicOpponent):
             self.weak = True
         else:
             self.weak = False
+
+
+class SACOpponent():
+    """
+    A class to represent an opponent that uses the Soft Actor-Critic algorithm
+    """
+
+    def __init__(self, env: HockeyEnv):
+        self.agent = SACAgent(
+            observation_space=env.observation_space,
+            action_space=env.action_space
+        )
 
 
 class Round:

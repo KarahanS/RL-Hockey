@@ -12,10 +12,10 @@ root_dir = os.path.dirname(os.path.abspath("../"))
 if root_dir not in sys.path:
     sys.path.append(root_dir)
 
-from DDQN.action_space import CustomActionSpace
+from DDQN.dqn_action_space import CustomActionSpace
 from DDQN.DQN import DQNAgent, TargetDQNAgent, DoubleDQNAgent
 from DDQN.DDQN import DuelingDQNAgent, DoubleDuelingDQNAgent
-from DDQN.trainer import Stats, Round, CustomHockeyMode, RandomWeaknessBasicOpponent, \
+from DDQN.dqn_trainer import Stats, Round, CustomHockeyMode, RandomWeaknessBasicOpponent, \
     train_ddqn_agent_torch
     
 import hockey.hockey_env as h_env
@@ -26,8 +26,64 @@ def running_mean(x, N):
     return (cumsum[N:] - cumsum[:-N]) / float(N)
 
 
+def parse_rounds_arg(rounds_str: str) -> tuple[int, str, str]:
+    """Parse the rounds argument string "len,oppname,modename" into a tuple of
+    (round_len, opp_name, mode_name)
+    """
+
+    try:
+        round_len, opp_name, mode_name = rounds_str.split(",")
+        round_len = int(round_len)
+
+        return round_len, opp_name, mode_name
+    except ValueError:
+        raise ValueError(f"Invalid rounds argument: {rounds_str}")
+    except KeyError:
+        raise ValueError(f"Invalid mode: {mode_name}")
+    except Exception as e:
+        raise ValueError(f"Error parsing rounds argument: {e}")
+
+
+def parse_rounds_tuple(rounds_args: list | tuple, opps_dict: dict) -> list[Round]:
+    """Parse the rounds argument tuple into a list of Round objects"""
+
+    rounds = []
+    has_cotraining = False
+
+    for r in rounds_args:
+        len, opp_name, mode_name = r
+
+        if opp_name not in opps_dict:
+            raise ValueError(f"Invalid opponent name: {opp_name}. Available opponents: {opps_dict.keys()}")
+        
+        if opp_name == "self_scratch":
+            train_opp = True
+            has_cotraining = True
+        else:
+            train_opp = False
+        
+        match mode_name:
+            case "normal":
+                mode = CustomHockeyMode.NORMAL
+            case "sht":
+                mode = CustomHockeyMode.SHOOTING
+            case "def":
+                mode = CustomHockeyMode.DEFENSE
+            case "shtdef":
+                mode = CustomHockeyMode.RANDOM_SHOOTING_DEFENSE
+            case "rand":
+                mode = CustomHockeyMode.RANDOM_ALL
+            case _:
+                raise ValueError(f"Invalid mode: {mode_name}")
+        
+        rounds.append(Round(len, opps_dict[opp_name], mode, train_opp=train_opp))
+    
+    return rounds, has_cotraining
+
+
 def train(hparams, run_name, agent_type, action_space, model_dir="./models/", model_init_ckpt=None,
-          skip_plot=False, plot_dir="./plots/", eval_freq=500, co_trained=False):
+          skip_plot=False, plot_dir="./plots/", rounds_config=[(20_000, "strong", "normal")],
+          eval_freq=500):
     # Load the environment
     env = h_env.HockeyEnv()
 
@@ -81,32 +137,18 @@ def train(hparams, run_name, agent_type, action_space, model_dir="./models/", mo
     agent_opp_random = RandomWeaknessBasicOpponent(weakness_prob=hparams["weakness_prob"])
     agent_opp_self_scratch = copy.deepcopy(agent_player)  # Trained alongside the player
     agent_opp_self_copy = copy.deepcopy(agent_player)  # Copy of the player for evaluation - will be updated during training
-    # TODO: Include the frozen opp. below when we have good DQN agent weights
+    # TODO: Include the frozen good opp. below - SAC seems good to go
     """
-    agent_opp_self_frozen = copy.deepcopy(agent_player)  # Pretrained and frozen good DQN player
-    try:
-        # FIXME: Replace with fixed paths with proper weights of a default size. need to load according to the agent type
-        agent_opp_self_frozen.load_state(good_model_path)
-    except RuntimeError:
-        print("WARNING: Pretrained model incompatible with agent. Evaluation against frozen"
-              " self copy will use a non-initialized copy of the agent.")
-    except FileNotFoundError:
-        print("WARNING: Pretrained model not found. Evaluation against frozen"
-              " self copy will use a non-initialized copy of the agent.")
-    except Exception as e:
-        print(f"WARNING: Error loading pretrained model: {e}. Evaluation against frozen"
-              " self copy will use a non-initialized copy of the agent.")
+    agent_opp_self_frozen = ...
     """
 
-    eval_opps_dict = {
+    train_opps_dict = {  # Opponents to train against
         "weak": agent_opp_weak,
         "strong": agent_opp_strong,
-        #"randweak_p" + f"{agent_opp_random.weakness_prob}": agent_opp_random,
+        "randweak": agent_opp_random,
         #"self_frozen": agent_opp_self_frozen,
-        "self_copy": agent_opp_self_copy
+        "self_scratch": agent_opp_self_scratch
     }
-    if co_trained:
-        eval_opps_dict["self_scratch"] = agent_opp_self_scratch
 
     # For visualization
     stats = Stats()
@@ -115,14 +157,18 @@ def train(hparams, run_name, agent_type, action_space, model_dir="./models/", mo
     wandb_hparams["run_name"] = run_name
 
     # Define the rounds
+    rounds, co_trained = parse_rounds_tuple(rounds_config, train_opps_dict)
+    
+    eval_opps_dict = {  # Opponents to evaluate against
+        "weak": agent_opp_weak,
+        "strong": agent_opp_strong,
+        #"randweak_p" + f"{agent_opp_random.weakness_prob}": agent_opp_random,
+        #"self_frozen": agent_opp_self_frozen,
+        "self_copy": agent_opp_self_copy
+    }
     if co_trained:
-        rounds = [
-            Round(wandb_hparams["long_round_ep"], agent_opp_self_scratch, CustomHockeyMode.NORMAL, train_opp=True),
-        ]
-    else:
-        rounds = [
-            Round(wandb_hparams["long_round_ep"], agent_opp_random, CustomHockeyMode.NORMAL)
-        ] 
+        # Evaluate against the co-trained agent as well
+        eval_opps_dict["self_scratch"] = agent_opp_self_scratch
 
     # Train the agent
 
@@ -226,13 +272,13 @@ if __name__ == "__main__":
     # Training hparam.s
     parser.add_argument("--ddqn-iter-fit", type=int, default=32, help="Number of iterations to train the DDQN agent"
                         " for each episode")
-    parser.add_argument("--long-round-ep", type=int, default=20_000, help="Number of episodes for the long round")
+    parser.add_argument("--rounds", type=parse_rounds_arg, nargs="+", default=[(20_000, "strong", "normal")],
+                        help="Rounds of training with different opponents and modes")
     parser.add_argument("--print-freq", type=int, default=25, help="Frequency of printing the training statistics")
     parser.add_argument("--skip-plot", action="store_true", help="Skip plotting the training statistics")
     parser.add_argument("--eval-freq", type=int, default=10_000, help="Frequency of evaluating the agent")
     parser.add_argument("--eval-num-matches", type=int, default=1000,
                         help="Number of matches to play for evaluation")
-    parser.add_argument("--co-trained", action="store_true", help="Train two agents: The player and its copy against each other")
     parser.add_argument("--verbose", action="store_true", help="Verbosity of the training process")
 
     args = parser.parse_args()
@@ -255,16 +301,15 @@ if __name__ == "__main__":
         # Opponent hparam.s
         "weakness_prob": 0.5,
         # Training hparam.s
+        "rounds_config": args.rounds,
         "max_steps": 100000,  # Overridden by environment
         "ddqn_iter_fit": args.ddqn_iter_fit,
         "print_freq": args.print_freq,
-        "long_round_ep": args.long_round_ep,
         "eval_num_matches": args.eval_num_matches,
         "verbose": args.verbose
     }
 
     # TODO: Support hparam search with appropriate run names
     train(hparams, args.run_name, args.agent_type, args.action_space, model_dir=args.model_dir,
-          model_init_ckpt=args.continue_from,
-          skip_plot=args.skip_plot, plot_dir=args.plot_dir,
-          eval_freq=args.eval_freq, co_trained=args.co_trained)
+          model_init_ckpt=args.continue_from, skip_plot=args.skip_plot, plot_dir=args.plot_dir,
+          rounds_config=args.rounds, eval_freq=args.eval_freq)

@@ -8,7 +8,7 @@ root_dir = os.path.dirname(os.path.abspath("./"))
 if root_dir not in sys.path:
     sys.path.append(root_dir)
 
-from DDQN.action_space import CustomActionSpace
+from DDQN.dqn_action_space import CustomActionSpace
 from DDQN.DQN import DQNAgent
 from hockey.hockey_env import HockeyEnv, BasicOpponent
 

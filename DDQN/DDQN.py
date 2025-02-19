@@ -10,7 +10,7 @@ if root_dir not in sys.path:
     sys.path.append(root_dir)
 
 from DDQN.DQN import TargetDQNAgent, DoubleDQNAgent
-from DDQN.q_function import DuelingQFunction
+from DDQN.dqn_q_function import DuelingQFunction
 
 
 class DuelingDQNBase:
