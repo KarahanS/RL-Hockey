@@ -24,10 +24,12 @@ from DDQN.dqn_evaluation import compare_agents, display_stats
 from DDQN.DQN import DQNAgent
 from hockey.hockey_env import Mode as HockeyMode
 from hockey.hockey_env import HockeyEnv, BasicOpponent
+from SAC.src.hockey_trainer import load_sac_agent, load_td3_agent
 from SAC.src.sac import SACAgent
 
 
 best_strong_winrate = 0.0
+MAX_EVAL_THREADS = 1
 
 
 class CustomHockeyMode(Enum):
@@ -60,11 +62,15 @@ class SACOpponent():
     A class to represent an opponent that uses the Soft Actor-Critic algorithm
     """
 
-    def __init__(self, env: HockeyEnv):
-        self.agent = SACAgent(
-            observation_space=env.observation_space,
-            action_space=env.action_space
-        )
+    def __init__(self, env: HockeyEnv, pth_dir: str = None):
+        self.pth_dir = pth_dir if pth_dir is not None else os.path.join(root_dir, "DDQN/scripts/models/karahan-sac/champion2.pth")
+        self.agent = load_sac_agent(config_path=None, checkpoint_path=self.pth_dir, env=env)
+
+    def act(self, obs: np.ndarray) -> np.ndarray:
+        return self.agent.act(obs, eval_mode=True)
+
+
+# TODO: TD3Opponent
 
 
 class Round:
@@ -213,7 +219,7 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, action_space: Discre
     eval_threads = []
     print_lock = Lock()
     best_save_lock = Lock()
-    eval_semaphore = BoundedSemaphore(2)
+    eval_semaphore = BoundedSemaphore(MAX_EVAL_THREADS)
 
     if wandb_hparams is not None:
         wandb_hparams["rounds"] = [str(r) for r in rounds]
@@ -280,14 +286,16 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, action_space: Discre
             if isinstance(agent_opp, RandomWeaknessBasicOpponent):
                 agent_opp.update_weakness()
 
+            done = False
+            trunc = False
             for t in range(max_steps):
-                done = False
-                trunc = False
-
+                # TODO: act() also works here. should we use it and get rid of np2gpu?
+                #   Both act and act_torch transfer CPU data to the GPU at some point. is one more efficient?
+                #   Also apply to dqn_evaluation.py
                 act_a1_discr = agent.act_torch(np2gpu(ob_a1), explore=True)  # int
                 act_a1 = discrete2cont(act_a1_discr)  # numpy array
                 if isinstance(agent_opp, DQNAgent):
-                    act_a2_discr = agent_opp.act(ob_a2, explore=True)  # int
+                    act_a2_discr = agent_opp.act_torch(np2gpu(ob_a2), explore=True)  # int  # TODO: see above
                     act_a2 = discrete2cont(act_a2_discr)  # numpy array
                 else:
                     act_a2 = agent_opp.act(ob_a2)  # numpy array
@@ -349,16 +357,16 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, action_space: Discre
             
             if (eval_freq > 0) and (total_eps % eval_freq == 0 or i == max_ep - 1):
                 # Agent back-up
-                for p in Path(model_dir).glob("Q_model_ep_*.ckpt"):  # TODO: remove only if worse - keep best rather than latest
+                for p in Path(model_dir).glob(f"{run_id}_ep_*.ckpt"):  # TODO: remove only if worse - keep best rather than latest
                     p.unlink()
-                agent.save_state(os.path.join(model_dir, f"Q_model_ep_{total_eps}.ckpt"))
+                agent.save_state(os.path.join(model_dir, f"{run_id}_ep_{total_eps}.ckpt"))
 
                 # Evaluation
                 # Copy agent: copy from dict and reinitialize to avoid deepcopy protocol error
                 agent_copy = copy.deepcopy(eval_opps_dict["self_copy"])
-                agent_copy.load_state(os.path.join(model_dir, f"Q_model_ep_{total_eps}.ckpt"))
+                agent_copy.load_state(os.path.join(model_dir, f"{run_id}_ep_{total_eps}.ckpt"))
 
-                # Same for self_scratch opponent if it exists
+                # Same for self_scratch and SAC opponent if they exist
                 # FIXME: This is hacky: need to pinpoint the exact tensor issue with MemoryPERTorch
                 #   and just copy the dict instead. Also see related FIXME in eval_task
                 #eval_opps_dict_copy = copy.deepcopy(eval_opps_dict)  # Each thread needs its own copy
@@ -367,17 +375,19 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, action_space: Discre
                     if name == "self_scratch":
                         agent_scratch = eval_opps_dict["self_scratch"]
                         agent_scratch.save_state(
-                            os.path.join(model_dir, f"Q_model_ep_{total_eps}_COTRAIN_TEMP.ckpt")
+                            os.path.join(model_dir, f"{run_id}_ep_{total_eps}_COTRAIN_TEMP.ckpt")
                         )
                         agent_scratch_copy = copy.deepcopy(eval_opps_dict["self_copy"])
                         agent_scratch_copy.load_state(
-                            os.path.join(model_dir, f"Q_model_ep_{total_eps}_COTRAIN_TEMP.ckpt")
+                            os.path.join(model_dir, f"{run_id}_ep_{total_eps}_COTRAIN_TEMP.ckpt")
                         )
 
-                        for p in Path(model_dir).glob("Q_model_ep_*_COTRAIN_TEMP.ckpt"):
+                        for p in Path(model_dir).glob(f"{run_id}_ep_*_COTRAIN_TEMP.ckpt"):
                             p.unlink()
 
                         eval_opps_dict_copy[name] = agent_scratch_copy
+                    elif name == "sac":
+                        eval_opps_dict_copy[name] = SACOpponent(env, pth_dir=eval_opps_dict[name].pth_dir)
                     else:
                         eval_opps_dict_copy[name] = copy.deepcopy(opp)
                 eval_opps_dict_copy["self_copy"] = agent_copy

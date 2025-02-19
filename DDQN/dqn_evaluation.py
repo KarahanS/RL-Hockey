@@ -1,6 +1,7 @@
 import os
 import sys
 
+import torch
 import numpy as np
 from gymnasium.spaces import Discrete
 
@@ -46,6 +47,10 @@ def compare_agents(agent_player: DQNAgent, agent_opp: DQNAgent | BasicOpponent, 
     except AttributeError:
         env.seed(seed)
 
+    train_device = agent_player.train_device
+    def np2gpu(data: np.ndarray) -> torch.Tensor:
+        return torch.from_numpy(data).float().to(train_device)
+
     if tqdm is None:
         tqdm = lambda x: x
 
@@ -64,11 +69,13 @@ def compare_agents(agent_player: DQNAgent, agent_opp: DQNAgent | BasicOpponent, 
             if render:
                 env.render()
             
-            a1_discr = agent_player.act(obs)
+            a1_discr = agent_player.act_torch(np2gpu(obs))
             a1 = discrete2cont(a1_discr)
-            a2 = agent_opp.act(obs_opp)
             if isinstance(agent_opp, DQNAgent):
+                a2 = agent_opp.act_torch(np2gpu(obs_opp))
                 a2 = discrete2cont(a2)
+            else:
+                a2 = agent_opp.act(obs_opp)
 
             obs, reward, done, trunc, info_player = env.step(np.hstack([a1, a2]))
             info_opp = env.get_info_agent_two()

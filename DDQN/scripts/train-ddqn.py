@@ -16,7 +16,7 @@ from DDQN.dqn_action_space import CustomActionSpace
 from DDQN.DQN import DQNAgent, TargetDQNAgent, DoubleDQNAgent
 from DDQN.DDQN import DuelingDQNAgent, DoubleDuelingDQNAgent
 from DDQN.dqn_trainer import Stats, Round, CustomHockeyMode, RandomWeaknessBasicOpponent, \
-    train_ddqn_agent_torch
+    train_ddqn_agent_torch, SACOpponent
     
 import hockey.hockey_env as h_env
 
@@ -137,18 +137,30 @@ def train(hparams, run_name, agent_type, action_space, model_dir="./models/", mo
     agent_opp_random = RandomWeaknessBasicOpponent(weakness_prob=hparams["weakness_prob"])
     agent_opp_self_scratch = copy.deepcopy(agent_player)  # Trained alongside the player
     agent_opp_self_copy = copy.deepcopy(agent_player)  # Copy of the player for evaluation - will be updated during training
-    # TODO: Include the frozen good opp. below - SAC seems good to go
-    """
-    agent_opp_self_frozen = ...
-    """
+    agent_opp_sac = SACOpponent(env=env)
 
     train_opps_dict = {  # Opponents to train against
         "weak": agent_opp_weak,
         "strong": agent_opp_strong,
         "randweak": agent_opp_random,
-        #"self_frozen": agent_opp_self_frozen,
-        "self_scratch": agent_opp_self_scratch
+        "self_scratch": agent_opp_self_scratch,
+        "sac": agent_opp_sac
     }
+
+    # Define the rounds
+    rounds, co_trained = parse_rounds_tuple(rounds_config, train_opps_dict)
+    
+    # Define the opponents to evaluate against
+    eval_opps_dict = {  # Opponents to evaluate against
+        "weak": agent_opp_weak,
+        "strong": agent_opp_strong,
+        #"randweak_p" + f"{agent_opp_random.weakness_prob}": agent_opp_random,
+        "self_copy": agent_opp_self_copy,
+        "sac": agent_opp_sac
+    }
+    if co_trained:
+        # Evaluate against the co-trained agent as well
+        eval_opps_dict["self_scratch"] = agent_opp_self_scratch
 
     # For visualization
     stats = Stats()
@@ -156,23 +168,10 @@ def train(hparams, run_name, agent_type, action_space, model_dir="./models/", mo
     wandb_hparams["agent_type"] = agent_type
     wandb_hparams["run_name"] = run_name
 
-    # Define the rounds
-    rounds, co_trained = parse_rounds_tuple(rounds_config, train_opps_dict)
-    
-    eval_opps_dict = {  # Opponents to evaluate against
-        "weak": agent_opp_weak,
-        "strong": agent_opp_strong,
-        #"randweak_p" + f"{agent_opp_random.weakness_prob}": agent_opp_random,
-        #"self_frozen": agent_opp_self_frozen,
-        "self_copy": agent_opp_self_copy
-    }
-    if co_trained:
-        # Evaluate against the co-trained agent as well
-        eval_opps_dict["self_scratch"] = agent_opp_self_scratch
 
     # Train the agent
 
-    train_ddqn_agent_torch(
+    run_id = train_ddqn_agent_torch(
         agent_player,
         env,
         action_space,
@@ -190,7 +189,9 @@ def train(hparams, run_name, agent_type, action_space, model_dir="./models/", mo
     )
 
     # Save the agent model weights
-    agent_player.save_state(os.path.join(model_dir, "Q_model.ckpt"))
+    hs_a = ("_a" + str(hparams["hidden_sizes_A"])) if "duel" in agent_type else ""
+    hs_v = ("_v" + str(hparams["hidden_sizes_V"])) if "duel" in agent_type else ""
+    agent_player.save_state(os.path.join(model_dir, f"{run_id}_{run_name}_last_q{hparams["hidden_sizes"]}" + hs_a + hs_v + ".ckpt"))
 
     # Plot the statistics & save
     if not skip_plot:
