@@ -16,7 +16,7 @@ from DDQN.dqn_action_space import CustomActionSpace
 from DDQN.DQN import DQNAgent, TargetDQNAgent, DoubleDQNAgent
 from DDQN.DDQN import DuelingDQNAgent, DoubleDuelingDQNAgent
 from DDQN.dqn_trainer import Stats, Round, CustomHockeyMode, RandomWeaknessBasicOpponent, \
-    train_ddqn_agent_torch, SACOpponent
+    SACOpponent, RandomStrongSACOpponent, train_ddqn_agent_torch
     
 import hockey.hockey_env as h_env
 
@@ -62,6 +62,7 @@ def parse_rounds_tuple(rounds_args: list | tuple, opps_dict: dict) -> list[Round
         else:
             train_opp = False
         
+        # TODO: Maybe we can use enum names directly
         match mode_name:
             case "normal":
                 mode = CustomHockeyMode.NORMAL
@@ -139,13 +140,15 @@ def train(hparams, run_name, agent_type, action_space, model_dir="./models/", mo
     agent_opp_self_scratch = copy.deepcopy(agent_player)  # Trained alongside the player
     agent_opp_self_copy = copy.deepcopy(agent_player)  # Copy of the player for evaluation - will be updated during training
     agent_opp_sac = SACOpponent(env=env)
+    agent_opp_rand_sac = RandomStrongSACOpponent(env=env, weakness_prob=hparams["weakness_prob"])
 
     train_opps_dict = {  # Opponents to train against
         "weak": agent_opp_weak,
         "strong": agent_opp_strong,
         "randweak": agent_opp_random,
         "self_scratch": agent_opp_self_scratch,
-        "sac": agent_opp_sac
+        "sac": agent_opp_sac,
+        "rand_sac": agent_opp_rand_sac
     }
 
     # Define the rounds

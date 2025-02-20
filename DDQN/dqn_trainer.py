@@ -70,6 +70,28 @@ class SACOpponent():
         return self.agent.act(obs, eval_mode=True)
 
 
+class RandomStrongSACOpponent(RandomWeaknessBasicOpponent):
+    """An agent thar randomly switches between strong basic opp. and SAC opp."""
+
+    def __init__(self, env: HockeyEnv, weakness_prob: float = 0.5):
+        super().__init__(weakness_prob)
+        self.sac_agent = SACOpponent(env)
+        self.weak = False  # Always strong basic opp. if not SAC
+        self.use_basicstrong = False
+            
+    def update_weakness(self):
+        if np.random.rand() < self.weakness_prob:
+            self.use_basicstrong = True
+        else:
+            self.use_basicstrong = False
+    
+    def act(self, obs: np.ndarray) -> np.ndarray:
+        if self.use_basicstrong:
+            return super().act(obs)
+        else:
+            return self.sac_agent.act(obs)
+
+
 # TODO: TD3Opponent
 
 
