@@ -217,15 +217,13 @@ class TargetDQNAgent(DQNAgent):
             self._update_target_net(tau=1.0)
         
 
-    def _update_target_net(self, tau):
+    def _update_target_net(self, tau):  # FIXME: This is not used, remove
         for target_param, param in zip(self.Q_target.parameters(), self.Q.parameters()):
             target_param.data.copy_(tau * param.data + (1.0 - tau) * target_param.data)
-        self.Q_target.load_state_dict(self.Q.state_dict())
     
     def _update_target_net_torch(self, tau):
         for target_param, param in zip(self.Q_target.parameters(), self.Q.parameters()):
             target_param.data.copy_(tau * param.data + (1.0 - tau) * target_param.data)
-        self.Q_target.load_state_dict(self.Q.state_dict())
     
     def _training_objective(self, sampled_data):
         """Return sampled states, actions, and the value to minimize in the Q-learning update"""

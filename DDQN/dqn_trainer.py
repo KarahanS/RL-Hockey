@@ -29,6 +29,7 @@ from SAC.src.sac import SACAgent
 
 
 best_strong_winrate = 0.0
+best_sac_winrate = 0.0
 MAX_EVAL_THREADS = 4
 
 
@@ -131,8 +132,9 @@ def eval_task(agent_copy: DQNAgent, opps_dict_copy: dict, env_copy: HockeyEnv,
               action_space: Discrete | CustomActionSpace, curr_ep: int, curr_round_ep: int,
               max_eps: int, eval_num_matches: int, wandb_hparams: dict, model_dir,
               eval_semaphore: BoundedSemaphore, print_lock: Lock, best_save_lock: Lock,
-              verbose=False):
+              run_id, verbose=False):
     global best_strong_winrate
+    global best_sac_winrate
     
     def eval_opp(agent_loc: DQNAgent, opp_loc: DQNAgent | BasicOpponent, name_loc: str,
                  env_loc: HockeyEnv):
@@ -177,15 +179,28 @@ def eval_task(agent_copy: DQNAgent, opps_dict_copy: dict, env_copy: HockeyEnv,
         print(f"Evaluated against {name_loc} in {(end - start):.2f} seconds")
 
         if name_loc == "strong":
+            global best_strong_winrate
             if win_rate_player > best_strong_winrate:
                 with best_save_lock:
                     best_strong_winrate = win_rate_player
 
-                    for p in Path(model_dir).glob("Q_model_best_strong_ep*.ckpt"):
+                    for p in Path(model_dir).glob(f"{run_id}_best_strong_ep*.ckpt"):
                         p.unlink()
                     agent_loc.save_state(os.path.join(
                         model_dir,
-                        f"Q_model_best_strong_ep{curr_ep}_wr{win_rate_player}.ckpt"
+                        f"{run_id}_best_strong_ep{curr_ep}_wr{win_rate_player}.ckpt"
+                    ))
+        elif name_loc == "sac":
+            global best_sac_winrate
+            if win_rate_player > best_sac_winrate:
+                with best_save_lock:
+                    best_sac_winrate = win_rate_player
+
+                    for p in Path(model_dir).glob(f"{run_id}_best_sac_ep*.ckpt"):
+                        p.unlink()
+                    agent_loc.save_state(os.path.join(
+                        model_dir,
+                        f"{run_id}_best_sac_ep{curr_ep}_wr{win_rate_player}.ckpt"
                     ))
     
     with eval_semaphore:
@@ -422,7 +437,7 @@ def train_ddqn_agent_torch(agent: DQNAgent, env: HockeyEnv, action_space: Discre
                     args=(
                         agent_copy, eval_opps_dict_copy, env_copy, action_space, total_eps, i, max_ep,
                         (1000 if i == max_ep - 1 else eval_num_matches), wandb_hparams, model_dir,
-                        eval_semaphore, print_lock, best_save_lock, verbose
+                        eval_semaphore, print_lock, best_save_lock, run_id, verbose
                     )
                 )
                 eval_thread.start()
