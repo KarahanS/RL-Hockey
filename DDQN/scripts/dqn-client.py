@@ -12,7 +12,7 @@ if root_dir not in sys.path:
     sys.path.append(root_dir)
 
 import hockey.hockey_env as h_env
-from DDQN.action_space import CustomActionSpace
+from DDQN.dqn_action_space import CustomActionSpace
 from DDQN.DQN import DQNAgent, TargetDQNAgent, DoubleDQNAgent
 from DDQN.DDQN import DuelingDQNAgent, DoubleDuelingDQNAgent
 
