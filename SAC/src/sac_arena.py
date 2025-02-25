@@ -16,11 +16,11 @@ Then run them head-to-head for a certain number of episodes.
 """
 
 import sys
+
 sys.path.append("../")  # Adjust if needed so that TD3, etc. are importable.
-
-
-from DDQN.DDQN import DoubleDuelingDQNAgent
-from DDQN.action_space import CustomActionSpace
+from DDQN.dqn_action_space import CustomActionSpace
+from DDQN.DDQN import DoubleDuelingDQNAgent, DuelingDQNAgent
+from DDQN.DQN import DoubleDQNAgent, TargetDQNAgent, DQNAgent
 from TD3.src.td3 import TD3  # your TD3 implementation
 import argparse
 import torch
@@ -31,10 +31,17 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 import time
 
-from hockey_env import HockeyEnv, Mode, BasicOpponent, BasicAttackOpponent, BasicDefenseOpponent
+from hockey_env import (
+    HockeyEnv,
+    Mode,
+    BasicOpponent,
+    BasicAttackOpponent,
+    BasicDefenseOpponent,
+)
 from sac import SACAgent
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 def load_sac_agent(config_path, checkpoint_path, env):
     """
@@ -51,7 +58,7 @@ def load_sac_agent(config_path, checkpoint_path, env):
 
     learn_alpha = config.get("learn_alpha", True)
     if isinstance(learn_alpha, str):
-        learn_alpha = (learn_alpha.lower() == "true")
+        learn_alpha = learn_alpha.lower() == "true"
 
     agent = SACAgent(
         observation_space=env.observation_space,
@@ -88,6 +95,7 @@ def load_sac_agent(config_path, checkpoint_path, env):
     )
     agent.restore_full_state(checkpoint)
     return agent
+
 
 def load_td3_agent(config_path, checkpoint_prefix, env):
     """
@@ -132,24 +140,38 @@ def load_td3_agent(config_path, checkpoint_prefix, env):
             torch.load(checkpoint_prefix + "_rnd_optimizer.pth", map_location=device)
         )
     return agent
-def load_dqn_agent(config_path, checkpoint_path, env):
-    
-    agent = DoubleDuelingDQNAgent(
+
+
+def load_ddqn_agent(config_path, checkpoint_path, env, type=DoubleDuelingDQNAgent):
+    dqn_classes = {
+        "dqn": DQNAgent,
+        "targ-dqn": TargetDQNAgent,
+        "doub-dqn": DoubleDQNAgent,
+        "duel-dqn": DuelingDQNAgent,
+        "doub-duel-dqn": DoubleDuelingDQNAgent,
+    }
+
+    if type != DoubleDuelingDQNAgent:
+        raise ValueError("Only DoubleDuelingDQNAgent is supported for now.")
+
+    if "custactspc" in checkpoint_path:
+        act_space = CustomActionSpace()
+    else:
+        act_space = env.discrete_action_space
+
+    agent = type(
         env.observation_space,
-        env.discrete_action_space,
+        act_space,
         hidden_sizes=[512],
         hidden_sizes_A=[512, 512],
         hidden_sizes_V=[512, 512],
-        use_torch=True
+        use_torch=True,
     )
-    
     agent.load_state(checkpoint_path)
+    print(f"[DDQN] Loaded agent from checkpoint: {checkpoint_path}")
     return agent
 
 
-    act_a1_discr = agent.act_torch(np2gpu(ob_a1), explore=True)
-    act_a1 = CustomActionSpace.discrete_to_continuous(act_a1_discr)
-    
 def load_agent(agent_type, config_path, checkpoint_path, env):
     """
     Helper that unifies either SAC or TD3 for agent1.
@@ -159,7 +181,7 @@ def load_agent(agent_type, config_path, checkpoint_path, env):
     elif agent_type.lower() == "td3":
         return load_td3_agent(config_path, checkpoint_path, env)
     elif agent_type.lower() == "dqn":
-        return load_dqn_agent(config_path, checkpoint_path, env)
+        return load_ddqn_agent(config_path, checkpoint_path, env)
     else:
         raise ValueError(f"Invalid agent1_type: {agent_type}, must be sac or td3.")
 
@@ -174,7 +196,7 @@ def evaluate_agents(agent1, agent2, env, eval_episodes=100, render=False):
 
     def np2gpu(data: np.ndarray) -> torch.Tensor:
         return torch.from_numpy(data).float().to(device)
-    
+
     for episode in range(eval_episodes):
         obs, _ = env.reset()
         opp_obs = env.obs_agent_two() if hasattr(env, "obs_agent_two") else obs
@@ -189,8 +211,10 @@ def evaluate_agents(agent1, agent2, env, eval_episodes=100, render=False):
                 # Evaluate with no noise
                 action1 = agent1.act(obs, add_noise=False)
             elif isinstance(agent1, DoubleDuelingDQNAgent):
-                action1_discrete  = agent1.act_torch(np2gpu(obs))  # int
-                action1 = env.discrete_to_continous_action(action1_discrete)  # numpy array
+                action1_discrete = agent1.act_torch(np2gpu(obs))  # int
+                action1 = env.discrete_to_continous_action(
+                    action1_discrete
+                )  # numpy array
             else:
                 # Possibly a custom or dummy agent
                 try:
@@ -204,8 +228,10 @@ def evaluate_agents(agent1, agent2, env, eval_episodes=100, render=False):
             elif isinstance(agent2, TD3):
                 action2 = agent2.act(opp_obs, add_noise=False)
             elif isinstance(agent2, DoubleDuelingDQNAgent):
-                action2_discrete  = agent2.act_torch(np2gpu(obs))  # int
-                action2 = env.discrete_to_continous_action(action2_discrete)  # numpy array
+                action2_discrete = agent2.act_torch(np2gpu(obs))  # int
+                action2 = env.discrete_to_continous_action(
+                    action2_discrete
+                )  # numpy array
             else:
                 try:
                     action2 = agent2.act(opp_obs, eval_mode=True)
@@ -233,25 +259,54 @@ def evaluate_agents(agent1, agent2, env, eval_episodes=100, render=False):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Evaluate two Hockey agents (SAC or TD3).")
-    parser.add_argument("--agent1_type", type=str, default="sac",
-                        help="Type for agent1: sac or td3.")
-    parser.add_argument("--agent1_config", type=str, required=True,
-                        help="Path to the JSON config for agent1.")
-    parser.add_argument("--agent1_checkpoint", type=str, required=True,
-                        help="Path to the checkpoint (prefix if td3) for agent1.")
-    parser.add_argument("--agent2_config", type=str, default="",
-                        help="Path to the JSON config for agent2 if sac or td3.")
-    parser.add_argument("--agent2_checkpoint", type=str, default="",
-                        help="Checkpoint (prefix if td3) for agent2 if sac or td3.")
-    parser.add_argument("--opponent_type", type=str, default="sac",
-                        help="Type of opponent: sac, td3, weak, strong, none, basicdefense, basicattack")
-    parser.add_argument("--eval_episodes", type=int, default=100,
-                        help="Number of evaluation episodes.")
-    parser.add_argument("--env_mode", type=str, default="NORMAL",
-                        help="Hockey environment mode (NORMAL, TRAIN_SHOOTING, etc).")
-    parser.add_argument("--render", action="store_true", default=False,
-                        help="Render gameplay if set.")
+    parser = argparse.ArgumentParser(
+        description="Evaluate two Hockey agents (SAC or TD3)."
+    )
+    parser.add_argument(
+        "--agent1_type", type=str, default="sac", help="Type for agent1: sac or td3."
+    )
+    parser.add_argument(
+        "--agent1_config",
+        type=str,
+        required=True,
+        help="Path to the JSON config for agent1.",
+    )
+    parser.add_argument(
+        "--agent1_checkpoint",
+        type=str,
+        required=True,
+        help="Path to the checkpoint (prefix if td3) for agent1.",
+    )
+    parser.add_argument(
+        "--agent2_config",
+        type=str,
+        default="",
+        help="Path to the JSON config for agent2 if sac or td3.",
+    )
+    parser.add_argument(
+        "--agent2_checkpoint",
+        type=str,
+        default="",
+        help="Checkpoint (prefix if td3) for agent2 if sac or td3.",
+    )
+    parser.add_argument(
+        "--opponent_type",
+        type=str,
+        default="sac",
+        help="Type of opponent: sac, td3, weak, strong, none, basicdefense, basicattack",
+    )
+    parser.add_argument(
+        "--eval_episodes", type=int, default=100, help="Number of evaluation episodes."
+    )
+    parser.add_argument(
+        "--env_mode",
+        type=str,
+        default="NORMAL",
+        help="Hockey environment mode (NORMAL, TRAIN_SHOOTING, etc).",
+    )
+    parser.add_argument(
+        "--render", action="store_true", default=False, help="Render gameplay if set."
+    )
     return parser.parse_args()
 
 
@@ -266,28 +321,32 @@ def main():
         agent_type=args.agent1_type,
         config_path=args.agent1_config,
         checkpoint_path=args.agent1_checkpoint,
-        env=env
+        env=env,
     )
 
     # ------ Load agent2 or create built-in. ------
     opp_type = args.opponent_type.lower()
     if opp_type in ["sac", "td3", "dqn"]:
         if not args.agent2_config or not args.agent2_checkpoint:
-            raise ValueError(f"For {opp_type} opponent, must provide --agent2_config and --agent2_checkpoint.")
+            raise ValueError(
+                f"For {opp_type} opponent, must provide --agent2_config and --agent2_checkpoint."
+            )
         if opp_type == "sac":
             agent2 = load_sac_agent(args.agent2_config, args.agent2_checkpoint, env)
         elif opp_type == "td3":
             agent2 = load_td3_agent(args.agent2_config, args.agent2_checkpoint, env)
         else:
-            agent2 = load_dqn_agent(args.agent2_config, args.agent2_checkpoint, env)
+            agent2 = load_ddqn_agent(args.agent2_config, args.agent2_checkpoint, env)
     elif opp_type == "weak":
         agent2 = BasicOpponent(weak=True)
     elif opp_type == "strong":
         agent2 = BasicOpponent(weak=False)
     elif opp_type == "none":
+
         class DummyOpponent:
             def act(self, observation, **kwargs):
                 return np.zeros(env.action_space.shape[0] // 2, dtype=np.float32)
+
         agent2 = DummyOpponent()
     elif opp_type == "basicdefense":
         agent2 = BasicDefenseOpponent()
@@ -314,7 +373,9 @@ def main():
         pass
 
     # ------- Evaluate! -------
-    results = evaluate_agents(agent1, agent2, env, eval_episodes=args.eval_episodes, render=args.render)
+    results = evaluate_agents(
+        agent1, agent2, env, eval_episodes=args.eval_episodes, render=args.render
+    )
 
     print("Evaluation Results:")
     print(f"  Agent1 Wins: {results['agent1_win']} / {args.eval_episodes}")
@@ -324,14 +385,19 @@ def main():
     # Quick bar plot
     labels = ["Agent1", "Agent2", "Draw"]
     values = [results["agent1_win"], results["agent2_win"], results["draw"]]
-    plt.figure(figsize=(6,4))
-    bars = plt.bar(labels, values, color=["blue","green","gray"])
+    plt.figure(figsize=(6, 4))
+    bars = plt.bar(labels, values, color=["blue", "green", "gray"])
     plt.title("Evaluation Results")
     plt.ylabel("Number of Wins")
     for bar in bars:
         height = bar.get_height()
-        plt.text(bar.get_x()+bar.get_width()/2.0, height, f"{int(height)}",
-                 ha="center", va="bottom")
+        plt.text(
+            bar.get_x() + bar.get_width() / 2.0,
+            height,
+            f"{int(height)}",
+            ha="center",
+            va="bottom",
+        )
     # Optional saving
     # plot_filename = f"evaluation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
     # plt.savefig(plot_filename)
