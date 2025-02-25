@@ -14,3 +14,7 @@ You can send the job to the nodes:
 sbatch train.slurm
 (you can check the status of your job using squeue -u <username>)
 ```
+
+* `train.slurm`: Slurm script to run the training on the nodes.
+* `arena.slurm`: Slurm script to run a local competition between two agents.
+* `elo.slurm`: Slurm script to run an Elo rating tournament between multiple agents. 
