@@ -132,19 +132,19 @@ def load_td3_agent(config_path, checkpoint_prefix, env):
             torch.load(checkpoint_prefix + "_rnd_optimizer.pth", map_location=device)
         )
     return agent
-
 def load_dqn_agent(config_path, checkpoint_path, env):
+    
     agent = DoubleDuelingDQNAgent(
         env.observation_space,
-        CustomActionSpace(),
+        env.discrete_action_space,
         hidden_sizes=[512],
         hidden_sizes_A=[512, 512],
         hidden_sizes_V=[512, 512],
         use_torch=True
     )
+    
     agent.load_state(checkpoint_path)
     return agent
-
 
 
     act_a1_discr = agent.act_torch(np2gpu(ob_a1), explore=True)
