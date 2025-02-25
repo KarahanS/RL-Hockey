@@ -1,6 +1,4 @@
-# hockey-env
-
-This repository contains a hockey-like game environment for RL
+#### :star: If you found this repository useful, please consider giving it a star to show your support. Thanks! ####
 
 ## Installation
 
@@ -12,21 +10,24 @@ source env/bin/activate                                             # activate t
 pip install -r requirements.txt                                     # install the requirements
 pip install torch torchvision torchaudio                            # install a suitable torch version
 ```
-## HockeyEnv
 
-![Screenshot](assets/hockeyenv1.png)
+## Advanced Reinforcement Learning Algorithms for Hockey Game Environment
 
-``hockey.hockey_env.HockeyEnv``
+This repository implements three state-of-the-art reinforcement learning algorithms for the hockey-like game environment from the University of Tübingen's Reinforcement Learning course (Winter 24/25):
 
-A two-player (one per team) hockey environment.
-For our Reinforcment Learning Lecture @ Uni-Tuebingen.
-See Hockey-Env.ipynb notebook on how to run the environment.
+1. **Soft Actor-Critic (SAC)** - Implemented by [Karahan Sarıtaş](https://github.com/KarahanS)
+2. **Double Deep Q-Network (DDQN)** - Implemented by [Kıvanç Tezören](https://github.com/kivanctezoren)
+3. **Twin Delayed Deep Deterministic Policy Gradient (TD3)** - Implemented by [Oğuz Ata Çal](https://github.com/OguzAtaCal)
 
-The environment can be generated directly as an object or via the gym registry:
+## Notable Achievement
 
-``env = gym.envs.make("Hockey-v0")``
+Our SAC implementation (Muhteshember-SAC) ranked 5th among 140+ competing agents in the official [tournament leaderboard](https://comprl.cs.uni-tuebingen.de/leaderboard/).
 
-There is also a version against the basic opponent (with options)
+## Documentation
 
-``env = gym.envs.make("Hockey-One-v0", mode=0, weak_opponent=True)``
+For comprehensive documentation including:
+- Detailed algorithm descriptions
+- Extensive ablation and sensitivity studies on hyperparameters
+- Implementation techniques crucial to our competitive performance
 
+Please refer to our [technical report]().

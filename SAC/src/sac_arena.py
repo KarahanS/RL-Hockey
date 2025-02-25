@@ -31,12 +31,10 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 import time
 
-
 from hockey_env import HockeyEnv, Mode, BasicOpponent, BasicAttackOpponent, BasicDefenseOpponent
 from sac import SACAgent
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 
 def load_sac_agent(config_path, checkpoint_path, env):
     """
@@ -49,23 +47,7 @@ def load_sac_agent(config_path, checkpoint_path, env):
         config = checkpoint["config"]
         print("Loaded SAC config from checkpoint.")
     else:
-        with open(config_path, "r") as f:
-            config = json.load(f)
-        print("Loaded SAC config from file:", config_path)
-
-    # If checkpoint is a 3-tuple, etc.
-    if isinstance(checkpoint, tuple):
-        tpl = checkpoint
-        checkpoint = {}
-        checkpoint["actor_state_dict"] = tpl[0]
-        checkpoint["critic1_state_dict"] = tpl[1]
-        checkpoint["critic2_state_dict"] = tpl[2]
-
-    # Possibly parse hidden sizes, etc.
-    if isinstance(config["hidden_sizes_actor"], str):
-        config["hidden_sizes_actor"] = list(map(int, config["hidden_sizes_actor"].split(",")))
-    if isinstance(config["hidden_sizes_critic"], str):
-        config["hidden_sizes_critic"] = list(map(int, config["hidden_sizes_critic"].split(",")))
+        raise ValueError("No config found in checkpoint.")
 
     learn_alpha = config.get("learn_alpha", True)
     if isinstance(learn_alpha, str):
@@ -106,7 +88,6 @@ def load_sac_agent(config_path, checkpoint_path, env):
     )
     agent.restore_full_state(checkpoint)
     return agent
-
 
 def load_td3_agent(config_path, checkpoint_prefix, env):
     """
