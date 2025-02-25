@@ -16,7 +16,7 @@ pip install torch torchvision torchaudio                            # install a 
 This repository implements three state-of-the-art reinforcement learning algorithms for the hockey-like game environment from the University of Tübingen's Reinforcement Learning course (Winter 24/25):
 
 1. **Soft Actor-Critic (SAC)** - Implemented by [Karahan Sarıtaş](https://github.com/KarahanS)
-2. **Double Deep Q-Network (DDQN)** - Implemented by [Kıvanç Tezören](https://github.com/kivanctezoren)
+2. **Deep Q-Network (DQN)** - Implemented by [Kıvanç Tezören](https://github.com/kivanctezoren)
 3. **Twin Delayed Deep Deterministic Policy Gradient (TD3)** - Implemented by [Oğuz Ata Çal](https://github.com/OguzAtaCal)
 
 ## Notable Achievement
