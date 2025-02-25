@@ -26,29 +26,22 @@ if src_path not in sys.path:
 # Otherwise, if it's still named sac_arena.py, update this import as needed.
 import sac_arena  # or "import sac_arena" if that's your updated file name.
 
-
 def main():
     # Define the variables you want to use.
 
     # Agent1 type: "sac", "td3", or "dqn"
     agent1_type = "sac"  # Switch to "td3" if you want agent1 to be a TD3 agent.
     
-    # Paths for agent1's config and checkpoint.
-    #agent1_config = "td3_models/td3_vs_selfplay_v2/config.json"
-    #agent1_checkpoint = "td3_models/td3_vs_selfplay_v2/TD3_Hockey_self_play_seed_700_final.pth"
-
-    agent1_config = "final_train/config.json"
-    agent1_checkpoint = "final_train/PINK_01_WEAK_SELFPLAY_MODE1_1000_TH4_MIRROR.pth"
+    agent1_config = "path/to/agent1_config.json"
+    agent1_checkpoint = "path/to/agent1.pth"
     
     # For agent2, you can use either SAC or TD3 or a built-in type.
-    agent2_config = "final_train/config.json"
-    agent2_checkpoint = "final_train/PINK_01_STRONG.pth"
+    agent2_config = "path/to/agent1_config.json"
+    agent2_checkpoint = "path/to/agent2.json"
 
     # For a TD3 example: "pth/td3_self_play/TD3_Hockey_self_play_seed_700_final"
-
     # Set opponent_type to: "sac", "td3", "weak", "strong", "basicdefense", "basicattack", or "none"
     opponent_type = "sac"
-    
         
     print("Running evaluation with:")
     print("Agent1:", agent1_type, agent1_config, agent1_checkpoint)
@@ -85,7 +78,6 @@ def main():
 
     # If you wish, you can print the results here:
     # print("Evaluation done. Agent1Wins:", agent1win, "Agent2Wins:", agent2win, "Ties:", tie)
-
 
 if __name__ == "__main__":
     main()

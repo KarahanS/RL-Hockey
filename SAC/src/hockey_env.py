@@ -186,7 +186,7 @@ class HockeyEnv(gym.Env, EzPickle):
         self.keep_mode = keep_mode
         self.player1_has_puck = 0
         self.player2_has_puck = 0
-        
+
         self.first_touch_done = False
         self.first_touch_done_agent2 = False
 
@@ -241,8 +241,8 @@ class HockeyEnv(gym.Env, EzPickle):
         self.discrete_action_space = spaces.Discrete(7)
 
         self.verbose = verbose
-        
-        valid_rewards = {"basic", "middle", "advanced", "01", "02", "03", "04", "05"}
+
+        valid_rewards = {"basic", "middle", "advanced", "01", "02", "03", "04", "05", "defensive", "aggressive", "counterattack", "possession"}
 
         if reward not in valid_rewards:
             raise ValueError(f"reward must be one of {valid_rewards}, got {reward}")
@@ -285,7 +285,6 @@ class HockeyEnv(gym.Env, EzPickle):
     def r_uniform(self, mini, maxi):
         return self.np_random.uniform(mini, maxi, 1)[0]
 
-
     # ------------------ SYMMETRY HELPER METHODS ------------------
     # These methods implement a horizontal mirroring transformation.
     # Because the game is symmetric with respect to the horizontal axis,
@@ -309,10 +308,10 @@ class HockeyEnv(gym.Env, EzPickle):
         mirrored = state.copy()
 
         # Player 1: flip y position, y velocity, angle, and angular velocity
-        mirrored[1] = -mirrored[1]    # y position
-        mirrored[4] = -mirrored[4]    # y velocity
-        mirrored[2] = -mirrored[2]    # angle
-        mirrored[5] = -mirrored[5]    # angular velocity
+        mirrored[1] = -mirrored[1]  # y position
+        mirrored[4] = -mirrored[4]  # y velocity
+        mirrored[2] = -mirrored[2]  # angle
+        mirrored[5] = -mirrored[5]  # angular velocity
 
         # Player 2: indices 7, 10, 8, 11
         mirrored[7] = -mirrored[7]
@@ -327,13 +326,12 @@ class HockeyEnv(gym.Env, EzPickle):
         # Keep mode flags (indices 16, 17) remain unchanged
         return mirrored
 
-
     def mirror_action(self, action: np.ndarray) -> np.ndarray:
         mirrored = action.copy()
         if len(mirrored) == 4:
             # Single agent action: indices 0: x, 1: y, 2: angle, 3: shoot
-            mirrored[1] = -mirrored[1]   # flip y
-            mirrored[2] = -mirrored[2]   # flip angle
+            mirrored[1] = -mirrored[1]  # flip y
+            mirrored[2] = -mirrored[2]  # flip angle
         elif len(mirrored) == 8:
             # Full action vector for both agents:
             # For agent 1 (indices 0-3): flip y (index 1) and angle (index 2)
@@ -346,7 +344,6 @@ class HockeyEnv(gym.Env, EzPickle):
             raise ValueError(f"Unexpected action dimension: {len(mirrored)}")
         return mirrored
 
-    
     def _create_player(self, position, color, is_player_two):
         player = self.world.CreateDynamicBody(
             position=position,
@@ -843,33 +840,33 @@ class HockeyEnv(gym.Env, EzPickle):
         r = -self._compute_reward()
         r += info_two["reward_closeness_to_puck"]
         return float(r)
-    
+
     def _get_reward_01(self, info):
         return (
-        info["reward_closeness_to_puck"] * 0.5 +
-        info["reward_touch_puck"] * 2.0 +
-        info["reward_puck_direction"] * 1.0 +
-        self._compute_reward()
-    )
-    
+            info["reward_closeness_to_puck"] * 0.5
+            + info["reward_touch_puck"] * 2.0
+            + info["reward_puck_direction"] * 1.0
+            + self._compute_reward()
+        )
+
     def _get_reward_01_two(self, info_two):
         r = -self._compute_reward()
         r += info_two["reward_closeness_to_puck"] * 0.5
         r += info_two["reward_touch_puck"] * 2.0
         r += info_two["reward_puck_direction"] * 1.0
         return r
-        
+
     def _get_reward_02(self, info: Dict[str, Any]) -> float:
         """
         A more nuanced reward for player one.
-        
+
         Combines:
           - Win/loss signal (from _compute_reward)
           - Closeness to puck (penalty if far away)
           - Bonus for touching the puck
           - Bonus for the puck moving in the correct (attacking) direction
           - Bonus for making progress toward the opponent's goal
-        
+
         Note: CENTER_X and W are defined globally.
         """
         base = self._compute_reward()
@@ -877,19 +874,337 @@ class HockeyEnv(gym.Env, EzPickle):
         touch = info["reward_touch_puck"]
         direction = info["reward_puck_direction"]
         # For player one, the further right the puck is (i.e. its x > CENTER_X), the more progress.
-        puck_progress = max(0, (self.puck.position[0] - CENTER_X) / (W/2))
+        puck_progress = max(0, (self.puck.position[0] - CENTER_X) / (W / 2))
         # Combine with chosen weights:
-        reward = base + 0.3 * closeness + 3.0 * touch + 1.5 * direction + 2.0 * puck_progress
+        reward = (
+            base + 0.3 * closeness + 3.0 * touch + 1.5 * direction + 2.0 * puck_progress
+        )
+        return float(reward)
+
+
+    def _get_reward_defensive_two(self, info_two: Dict[str, Any]) -> float:
+        """
+        Mirror of defensive reward for player 2:
+        1. Stay between puck and own goal (right side)
+        2. Block shots
+        3. Clear puck away from goal
+        4. Don't over-commit backward
+        """
+        base = -self._compute_reward()  # Mirror win/loss
+        
+        # Get positions and velocities
+        puck_pos = np.array([self.puck.position[0], self.puck.position[1]])
+        player_pos = np.array([self.player2.position[0], self.player2.position[1]])
+        goal_pos = np.array([W, CENTER_Y])  # Their goal is on right side
+        
+        # 1. Positioning reward: higher when player is between puck and goal
+        if puck_pos[0] > CENTER_X:  # Puck in defensive half
+            puck_to_goal = goal_pos - puck_pos
+            player_to_goal = goal_pos - player_pos
+            positioning_reward = np.dot(puck_to_goal, player_to_goal) / (np.linalg.norm(puck_to_goal) * np.linalg.norm(player_to_goal))
+        else:
+            positioning_reward = 0
+        
+        # 2. Shot blocking: reward for being close when puck moves toward goal
+        if self.puck.linearVelocity[0] > 0:  # Puck moving toward own goal
+            blocking_reward = -info_two["reward_closeness_to_puck"] * 2.0
+        else:
+            blocking_reward = 0
+            
+        # 3. Clearing reward: bonus for hitting puck away from goal
+        clearing_reward = max(0, -self.puck.linearVelocity[0]) if info_two["reward_touch_puck"] > 0 else 0
+        
+        # 4. Position penalty: discourage going too far back
+        position_penalty = -max(0, (CENTER_X - player_pos[0])) / (W/2)
+        
+        reward = (base 
+                + 2.0 * positioning_reward 
+                + blocking_reward 
+                + clearing_reward 
+                + 0.5 * position_penalty)
+        
+        return float(reward)
+
+    def _get_reward_aggressive_two(self, info_two: Dict[str, Any]) -> float:
+        """
+        Mirror of aggressive reward for player 2:
+        1. Forward positioning (toward left)
+        2. Direct shots on goal (left goal)
+        3. High shot velocity
+        4. Quick possession recovery
+        """
+        base = -self._compute_reward()
+        
+        # 1. Forward positioning bonus (for player 2, forward is toward left)
+        player_pos = np.array([self.player2.position[0], self.player2.position[1]])
+        forward_bonus = max(0, (CENTER_X - player_pos[0])) / (W/2)
+        
+        # 2. Shot direction reward (toward left goal)
+        puck_vel = np.array([self.puck.linearVelocity[0], self.puck.linearVelocity[1]])
+        if np.linalg.norm(puck_vel) > 0:
+            goal_dir = np.array([-1, 0])  # Vector pointing to opponent's goal (left)
+            shot_alignment = np.dot(puck_vel, goal_dir) / np.linalg.norm(puck_vel)
+            shot_reward = max(0, shot_alignment) if info_two["reward_touch_puck"] > 0 else 0
+        else:
+            shot_reward = 0
+        
+        # 3. Shot power reward
+        shot_power = min(1.0, np.linalg.norm(puck_vel) / MAX_PUCK_SPEED)
+        
+        # 4. Quick possession reward
+        possession_reward = 2.0 if info_two["reward_touch_puck"] > 0 else -0.1
+        
+        reward = (base 
+                + 2.0 * forward_bonus
+                + 3.0 * shot_reward
+                + 2.0 * shot_power
+                + possession_reward)
+        
+        return float(reward)
+
+    def _get_reward_defensive(self, info: Dict[str, Any]) -> float:
+        """
+        Defensive reward that encourages:
+        1. Staying between puck and own goal when puck is in defensive half
+        2. Blocking shots
+        3. Clearing the puck away from goal
+        4. Not over-committing forward
+        """
+        base = self._compute_reward()  # Win/loss still matters
+        
+        # Get positions and velocities
+        puck_pos = np.array([self.puck.position[0], self.puck.position[1]])
+        player_pos = np.array([self.player1.position[0], self.player1.position[1]])
+        goal_pos = np.array([0, CENTER_Y])  # Own goal position
+        
+        # 1. Positioning reward: higher when player is between puck and goal
+        if puck_pos[0] < CENTER_X:  # Puck in defensive half
+            puck_to_goal = goal_pos - puck_pos
+            player_to_goal = goal_pos - player_pos
+            positioning_reward = np.dot(puck_to_goal, player_to_goal) / (np.linalg.norm(puck_to_goal) * np.linalg.norm(player_to_goal))
+        else:
+            positioning_reward = 0
+        
+        # 2. Shot blocking: reward for being close to puck when it's moving toward goal
+        if self.puck.linearVelocity[0] < 0:  # Puck moving toward own goal
+            blocking_reward = -info["reward_closeness_to_puck"] * 2.0
+        else:
+            blocking_reward = 0
+            
+        # 3. Clearing reward: bonus for hitting puck away from goal
+        clearing_reward = max(0, self.puck.linearVelocity[0]) if info["reward_touch_puck"] > 0 else 0
+        
+        # 4. Position penalty: discourage going too far forward
+        position_penalty = -max(0, (player_pos[0] - CENTER_X)) / (W/2)
+        
+        reward = (base 
+                + 2.0 * positioning_reward 
+                + blocking_reward 
+                + clearing_reward 
+                + 0.5 * position_penalty)
+        
+        return float(reward)
+
+    def _get_reward_aggressive(self, info: Dict[str, Any]) -> float:
+        """
+        Aggressive reward that encourages:
+        1. Forward positioning
+        2. Direct shots on goal
+        3. High shot velocity
+        4. Quick possession recovery
+        """
+        base = self._compute_reward()
+        
+        # 1. Forward positioning bonus
+        player_pos = np.array([self.player1.position[0], self.player1.position[1]])
+        forward_bonus = max(0, (player_pos[0] - CENTER_X)) / (W/2)
+        
+        # 2. Shot direction reward
+        puck_vel = np.array([self.puck.linearVelocity[0], self.puck.linearVelocity[1]])
+        if np.linalg.norm(puck_vel) > 0:
+            goal_dir = np.array([1, 0])  # Vector pointing to opponent's goal
+            shot_alignment = np.dot(puck_vel, goal_dir) / np.linalg.norm(puck_vel)
+            shot_reward = max(0, shot_alignment) if info["reward_touch_puck"] > 0 else 0
+        else:
+            shot_reward = 0
+        
+        # 3. Shot power reward
+        shot_power = min(1.0, np.linalg.norm(puck_vel) / MAX_PUCK_SPEED)
+        
+        # 4. Quick possession reward
+        possession_reward = 2.0 if info["reward_touch_puck"] > 0 else -0.1
+        
+        reward = (base 
+                + 2.0 * forward_bonus
+                + 3.0 * shot_reward
+                + 2.0 * shot_power
+                + possession_reward)
+        
+        return float(reward)
+
+    def _get_reward_possession(self, info: Dict[str, Any]) -> float:
+        """
+        Possession-based reward that encourages:
+        1. Maintaining control of the puck
+        2. Safe passes/movements
+        3. Position control
+        4. Puck protection
+        """
+        base = self._compute_reward()
+        
+        # 1. Possession time reward
+        possession_time = self.player1_has_puck / MAX_TIME_KEEP_PUCK
+        
+        # 2. Safe movement reward: higher reward for keeping puck away from opponent
+        puck_pos = np.array([self.puck.position[0], self.puck.position[1]])
+        opp_pos = np.array([self.player2.position[0], self.player2.position[1]])
+        safety_distance = np.linalg.norm(puck_pos - opp_pos)
+        safety_reward = min(1.0, safety_distance / (W/2)) if self.player1_has_puck > 0 else 0
+        
+        # 3. Position control: reward for keeping puck in advantageous positions
+        position_control = max(0, (puck_pos[0] - CENTER_X) / (W/2))
+        
+        # 4. Puck protection: penalize high-risk movements
+        puck_vel = np.array([self.puck.linearVelocity[0], self.puck.linearVelocity[1]])
+        risk_penalty = -min(1.0, np.linalg.norm(puck_vel) / MAX_PUCK_SPEED) if self.player1_has_puck > 0 else 0
+        
+        reward = (base
+                + 3.0 * possession_time
+                + 2.0 * safety_reward
+                + position_control
+                + 0.5 * risk_penalty)
+        
+        return float(reward)
+
+    def _get_reward_counterattack(self, info: Dict[str, Any]) -> float:
+        """
+        Counter-attacking reward that encourages:
+        1. Quick transitions after gaining possession
+        2. Fast breaks toward goal
+        3. Efficient puck movement
+        4. Strategic positioning for interceptions
+        """
+        base = self._compute_reward()
+        
+        # 1. Transition reward: bonus for quickly moving puck forward after gaining possession
+        transition_reward = 0
+        if info["reward_touch_puck"] > 0 and self.puck.linearVelocity[0] > 0:
+            transition_reward = min(1.0, self.puck.linearVelocity[0] / MAX_PUCK_SPEED)
+        
+        # 2. Fast break reward
+        puck_vel = np.array([self.puck.linearVelocity[0], self.puck.linearVelocity[1]])
+        speed_reward = min(1.0, np.linalg.norm(puck_vel) / MAX_PUCK_SPEED)
+        
+        # 3. Movement efficiency: reward direct paths to goal when in possession
+        if self.player1_has_puck > 0:
+            player_pos = np.array([self.player1.position[0], self.player1.position[1]])
+            goal_pos = np.array([W, CENTER_Y])
+            path_directness = 1.0 - abs(player_pos[1] - goal_pos[1]) / (H/2)
+            efficiency_reward = path_directness
+        else:
+            efficiency_reward = 0
+        
+        # 4. Interception positioning: reward being in good position to intercept passes
+        player_pos = np.array([self.player1.position[0], self.player1.position[1]])
+        if self.puck.linearVelocity[0] < 0:  # Puck moving toward our side
+            intercept_pos = player_pos[0] - self.puck.position[0]
+            positioning_reward = 1.0 if 0 < intercept_pos < W/4 else 0
+        else:
+            positioning_reward = 0
+        
+        reward = (base
+                + 3.0 * transition_reward
+                + 2.0 * speed_reward
+                + efficiency_reward
+                + 2.0 * positioning_reward)
+        
+        return float(reward)
+    def _get_reward_possession_two(self, info_two: Dict[str, Any]) -> float:
+        """
+        Mirror of possession reward for player 2:
+        1. Maintain control of puck
+        2. Safe passes/movements
+        3. Position control
+        4. Puck protection
+        """
+        base = -self._compute_reward()
+        
+        # 1. Possession time reward
+        possession_time = self.player2_has_puck / MAX_TIME_KEEP_PUCK
+        
+        # 2. Safe movement reward: higher for keeping puck away from opponent
+        puck_pos = np.array([self.puck.position[0], self.puck.position[1]])
+        opp_pos = np.array([self.player1.position[0], self.player1.position[1]])
+        safety_distance = np.linalg.norm(puck_pos - opp_pos)
+        safety_reward = min(1.0, safety_distance / (W/2)) if self.player2_has_puck > 0 else 0
+        
+        # 3. Position control: reward for keeping puck in advantageous positions
+        position_control = max(0, (CENTER_X - puck_pos[0]) / (W/2))
+        
+        # 4. Puck protection: penalize high-risk movements
+        puck_vel = np.array([self.puck.linearVelocity[0], self.puck.linearVelocity[1]])
+        risk_penalty = -min(1.0, np.linalg.norm(puck_vel) / MAX_PUCK_SPEED) if self.player2_has_puck > 0 else 0
+        
+        reward = (base
+                + 3.0 * possession_time
+                + 2.0 * safety_reward
+                + position_control
+                + 0.5 * risk_penalty)
+        
+        return float(reward)
+
+    def _get_reward_counterattack_two(self, info_two: Dict[str, Any]) -> float:
+        """
+        Mirror of counter-attacking reward for player 2:
+        1. Quick transitions after gaining possession
+        2. Fast breaks toward goal (left)
+        3. Efficient puck movement
+        4. Strategic positioning for interceptions
+        """
+        base = -self._compute_reward()
+        
+        # 1. Transition reward: bonus for quickly moving puck forward (left) after gaining possession
+        transition_reward = 0
+        if info_two["reward_touch_puck"] > 0 and self.puck.linearVelocity[0] < 0:
+            transition_reward = min(1.0, -self.puck.linearVelocity[0] / MAX_PUCK_SPEED)
+        
+        # 2. Fast break reward
+        puck_vel = np.array([self.puck.linearVelocity[0], self.puck.linearVelocity[1]])
+        speed_reward = min(1.0, np.linalg.norm(puck_vel) / MAX_PUCK_SPEED)
+        
+        # 3. Movement efficiency: reward direct paths to goal when in possession
+        if self.player2_has_puck > 0:
+            player_pos = np.array([self.player2.position[0], self.player2.position[1]])
+            goal_pos = np.array([0, CENTER_Y])  # Left goal
+            path_directness = 1.0 - abs(player_pos[1] - goal_pos[1]) / (H/2)
+            efficiency_reward = path_directness
+        else:
+            efficiency_reward = 0
+        
+        # 4. Interception positioning: reward being in good position to intercept passes
+        player_pos = np.array([self.player2.position[0], self.player2.position[1]])
+        if self.puck.linearVelocity[0] > 0:  # Puck moving toward our side
+            intercept_pos = self.puck.position[0] - player_pos[0]
+            positioning_reward = 1.0 if 0 < intercept_pos < W/4 else 0
+        else:
+            positioning_reward = 0
+        
+        reward = (base
+                + 3.0 * transition_reward
+                + 2.0 * speed_reward
+                + efficiency_reward
+                + 2.0 * positioning_reward)
+        
         return float(reward)
 
     def _get_reward_02_two(self, info_two: Dict[str, Any]) -> float:
         """
         A symmetric reward for player two.
-        
+
         It mirrors the logic for player one:
           - Uses the mirrored win/loss signal (-_compute_reward())
           - Uses the mirrored closeness, touch, and direction rewards from info_two
-          - Rewards progress if the puck is moving toward player two's goal 
+          - Rewards progress if the puck is moving toward player two's goal
             (i.e. its x < CENTER_X)
         """
         base = -self._compute_reward()  # mirror the win/loss signal
@@ -897,10 +1212,12 @@ class HockeyEnv(gym.Env, EzPickle):
         touch = info_two["reward_touch_puck"]
         direction = info_two["reward_puck_direction"]
         # For player two, we reward when the puck has moved left of center.
-        puck_progress = max(0, (CENTER_X - self.puck.position[0]) / (W/2))
-        reward = base + 0.3 * closeness + 3.0 * touch + 1.5 * direction + 2.0 * puck_progress
+        puck_progress = max(0, (CENTER_X - self.puck.position[0]) / (W / 2))
+        reward = (
+            base + 0.3 * closeness + 3.0 * touch + 1.5 * direction + 2.0 * puck_progress
+        )
         return float(reward)
-    
+
     def _get_reward_04(self, info: Dict[str, Any]) -> float:
         """
         Enhanced reward for player one with:
@@ -911,26 +1228,32 @@ class HockeyEnv(gym.Env, EzPickle):
         5. Early touch incentive
         """
         base = self._compute_reward()
-        
+
         # 1. Progressive positioning - normalized puck progress toward opponent goal
-        puck_progress = max(0.0, (self.puck.position[0] - CENTER_X) / (W/2 - CENTER_X))
-        
+        puck_progress = max(
+            0.0, (self.puck.position[0] - CENTER_X) / (W / 2 - CENTER_X)
+        )
+
         # 2. Sustained possession - bonus per step while controlling puck
         sustained_possession = 0.1 * (self.player1_has_puck / MAX_TIME_KEEP_PUCK)
-        
+
         # 3. Angle-aligned shot quality - combines speed and accuracy
         shot_speed = self.puck.linearVelocity[0] / MAX_PUCK_SPEED  # Normalized
-        y_alignment = 1.0 - abs(self.puck.position[1] - CENTER_Y)/(H/2)  # 1=center
+        y_alignment = 1.0 - abs(self.puck.position[1] - CENTER_Y) / (H / 2)  # 1=center
         shot_quality = shot_speed * y_alignment
-        
+
         # 4. Dynamic defensive positioning - reduce penalty if puck is moving away
         defensive_penalty = info["reward_closeness_to_puck"]
         if self.puck.linearVelocity[0] > 0:  # Puck moving toward opponent side
             defensive_penalty *= 0.2  # Reduce penalty by 80%
-            
+
         # 5. Early touch bonus - incentivize quick puck acquisition
-        early_touch = info["reward_touch_puck"] * (self.max_timesteps - self.time)/self.max_timesteps
-        
+        early_touch = (
+            info["reward_touch_puck"]
+            * (self.max_timesteps - self.time)
+            / self.max_timesteps
+        )
+
         reward = (
             base
             + 2.0 * puck_progress
@@ -945,17 +1268,23 @@ class HockeyEnv(gym.Env, EzPickle):
     def _get_reward_04_two(self, info_two: Dict[str, Any]) -> float:
         """Mirrored version for player two"""
         base = -self._compute_reward()
-        
-        puck_progress = max(0.0, (CENTER_X - self.puck.position[0]) / (W/2 - CENTER_X))
+
+        puck_progress = max(
+            0.0, (CENTER_X - self.puck.position[0]) / (W / 2 - CENTER_X)
+        )
         sustained_possession = 0.1 * (self.player2_has_puck / MAX_TIME_KEEP_PUCK)
         shot_speed = -self.puck.linearVelocity[0] / MAX_PUCK_SPEED
-        y_alignment = 1.0 - abs(self.puck.position[1] - CENTER_Y)/(H/2)
+        y_alignment = 1.0 - abs(self.puck.position[1] - CENTER_Y) / (H / 2)
         shot_quality = shot_speed * y_alignment
         defensive_penalty = info_two["reward_closeness_to_puck"]
         if self.puck.linearVelocity[0] < 0:  # Puck moving toward player two's side
             defensive_penalty *= 0.2
-        early_touch = info_two["reward_touch_puck"] * (self.max_timesteps - self.time)/self.max_timesteps
-        
+        early_touch = (
+            info_two["reward_touch_puck"]
+            * (self.max_timesteps - self.time)
+            / self.max_timesteps
+        )
+
         reward = (
             base
             + 2.0 * puck_progress
@@ -966,7 +1295,7 @@ class HockeyEnv(gym.Env, EzPickle):
             - 0.01
         )
         return float(reward)
-        
+
     def _get_reward_05(self, info: Dict[str, Any]) -> float:
         """
         Enhanced reward for player one with:
@@ -977,17 +1306,18 @@ class HockeyEnv(gym.Env, EzPickle):
         """
         base = self._compute_reward()
         closeness = info["reward_closeness_to_puck"]
-        touched = info["reward_touch_puck"]  # Expected to be 1.0 if the puck is touched; 0 otherwise.
-        
+        touched = info[
+            "reward_touch_puck"
+        ]  # Expected to be 1.0 if the puck is touched; 0 otherwise.
+
         bonus = 0.0
         # If the puck is touched for the first time during this episode, add a bonus.
         if (not self.first_touch_done) and (touched == 1.0):
             bonus = 0.1 * (self.max_timesteps - self.time)
             self.first_touch_done = True
-            
+
         reward = base + 5.0 * closeness - (1 - touched) * 0.1 + bonus
         return float(reward)
-
 
     def _get_reward_05_two(self, info_two: Dict[str, Any]) -> float:
         """
@@ -996,12 +1326,12 @@ class HockeyEnv(gym.Env, EzPickle):
         base = -self._compute_reward()  # Mirror the win/loss signal.
         closeness = info_two["reward_closeness_to_puck"]
         touched = info_two["reward_touch_puck"]
-        
+
         bonus = 0.0
         if (not self.first_touch_done_agent2) and (touched == 1.0):
             bonus = 0.1 * (self.max_timesteps - self.time)
             self.first_touch_done_agent2 = True
-            
+
         reward = base + 5.0 * closeness - (1 - touched) * 0.1 + bonus
         return float(reward)
 
@@ -1013,43 +1343,47 @@ class HockeyEnv(gym.Env, EzPickle):
 
     # --------------------------------------------------------------
     # 3) ADVANCED REWARD
-    #    
+    #
     # --------------------------------------------------------------
 
     def _get_reward_03(self, info: Dict[str, Any]) -> float:
         """
         A more nuanced reward for player one that augments the basic reward as follows:
-        
+
          A) env_reward: the base reward (e.g. win/loss)
          B) A bonus proportional to how close the agent is to the puck.
          C) A small per-step penalty if the agent does not touch the puck.
          D) A bonus if the agent touches the puck for the first time, scaled by how early the touch occurs.
          E) A bonus for the puck moving in the desired direction.
-        
+
         The timing bonus is computed as (max_timesteps - current_step) so that an early touch yields
         a higher bonus.
         """
         base = self._compute_reward()  # (A)
         closeness = info["reward_closeness_to_puck"]  # (B)
         touched = info["reward_touch_puck"]  # 1.0 if touched; 0 otherwise
-        direction = info["reward_puck_direction"]  # bonus if moving in the right direction
-        
+        direction = info[
+            "reward_puck_direction"
+        ]  # bonus if moving in the right direction
+
         # (D): Bonus if the puck is touched for the first time.
         # (max_timesteps - self.time) is larger if the touch occurs early.
         timing_bonus = touched * (self.max_timesteps - self.time)
-        
+
         # Combine with chosen weights:
-        reward = (base
-                  + 4.0 * closeness
-                  - 0.02 * (1 - touched)
-                  + 0.15 * timing_bonus
-                  + 1.0 * direction)
+        reward = (
+            base
+            + 4.0 * closeness
+            - 0.02 * (1 - touched)
+            + 0.15 * timing_bonus
+            + 1.0 * direction
+        )
         return float(reward)
 
     def _get_reward_03_two(self, info_two: Dict[str, Any]) -> float:
         """
         A symmetric reward for player two.
-        
+
         The idea is the same as for player one except that:
           - The base reward is mirrored (i.e. negative of _compute_reward())
           - The directional bonus should be appropriate for player two.
@@ -1058,34 +1392,38 @@ class HockeyEnv(gym.Env, EzPickle):
         closeness = info_two["reward_closeness_to_puck"]
         touched = info_two["reward_touch_puck"]
         direction = info_two["reward_puck_direction"]
-        
+
         timing_bonus = touched * (self.max_timesteps - self.time)
-        
-        reward = (base
-                  + 4.0 * closeness
-                  - 0.02 * (1 - touched)
-                  + 0.15 * timing_bonus
-                  + 1.0 * direction)
+
+        reward = (
+            base
+            + 4.0 * closeness
+            - 0.02 * (1 - touched)
+            + 0.15 * timing_bonus
+            + 1.0 * direction
+        )
         return float(reward)
- 
+
     def _get_reward_advanced(self, info: Dict[str, Any]) -> float:
         # Base win/loss reward.
         base = self._compute_reward()
-        
+
         # Proxy rewards.
         closeness = info["reward_closeness_to_puck"]
         touch = info["reward_touch_puck"]
         direction = info["reward_puck_direction"]
-        
+
         # Progress toward the opponent's goal:
         puck_progress = max(0, (self.puck.position[0] - CENTER_X) / (W / 2))
-        
+
         # Sustained possession bonus.
         sustained_possession = 0.1 * (self.player1_has_puck / MAX_TIME_KEEP_PUCK)
-        
+
         # Shot quality computation:
         vx, vy = self.puck.linearVelocity[0], self.puck.linearVelocity[1]
-        shot_speed = np.sqrt(vx * vx + vy * vy) / MAX_PUCK_SPEED  # normalized shot speed
+        shot_speed = (
+            np.sqrt(vx * vx + vy * vy) / MAX_PUCK_SPEED
+        )  # normalized shot speed
         theta_v = math.atan2(vy, vx)  # direction of the puck's velocity
 
         # Compute the direction toward the goal.
@@ -1093,93 +1431,97 @@ class HockeyEnv(gym.Env, EzPickle):
         dx = goal_center[0] - self.puck.position[0]
         dy = goal_center[1] - self.puck.position[1]
         theta_goal = math.atan2(dy, dx)
-        
+
         # Angular error between shot direction and goal direction.
         angle_error = abs(theta_v - theta_goal)
-        
+
         # Adjust penalty for angular error based on proximity to the top or bottom wall.
         # If the puck is near a wall, reduce the impact of the angle error (bank shot).
         distance_to_wall = min(self.puck.position[1], H - self.puck.position[1])
         threshold = H / 4  # threshold distance under which bank shots are likely
-        bank_factor = distance_to_wall / threshold if distance_to_wall < threshold else 1.0
-        
+        bank_factor = (
+            distance_to_wall / threshold if distance_to_wall < threshold else 1.0
+        )
+
         # Shot quality: higher when shot speed is high and the (weighted) angle error is low.
         shot_quality = shot_speed * (1 - bank_factor * angle_error / math.pi)
-        
+
         # Early touch bonus: incentivizes quick puck acquisition.
         early_touch = touch * (self.max_timesteps - self.time) / self.max_timesteps
-        
+
         # Combine all components with chosen weights.
         reward = (
-            base +
-            0.3 * closeness +
-            3.0 * touch +
-            1.5 * direction +
-            2.0 * puck_progress +
-            sustained_possession +
-            1.5 * shot_quality +
-            0.5 * early_touch -
-            0.01  # small constant penalty for urgency
+            base
+            + 0.3 * closeness
+            + 3.0 * touch
+            + 1.5 * direction
+            + 2.0 * puck_progress
+            + sustained_possession
+            + 1.5 * shot_quality
+            + 0.5 * early_touch
+            - 0.01  # small constant penalty for urgency
         )
-        
+
         return float(reward)
 
     def _get_reward_advanced_two(self, info_two: Dict[str, Any]) -> float:
         # Mirror the base win/loss reward.
         base = -self._compute_reward()
-        
+
         # Proxy rewards from info for player two.
         closeness = info_two["reward_closeness_to_puck"]
         touch = info_two["reward_touch_puck"]
         direction = info_two["reward_puck_direction"]
-        
+
         # For player two, progress is measured as how far the puck has moved toward the left side.
         puck_progress = max(0, (CENTER_X - self.puck.position[0]) / (W / 2))
-        
+
         # Sustained possession bonus for player two.
         sustained_possession = 0.1 * (self.player2_has_puck / MAX_TIME_KEEP_PUCK)
-        
+
         # Shot quality computation for player two:
         vx, vy = self.puck.linearVelocity[0], self.puck.linearVelocity[1]
         # Compute normalized shot speed (same for both players).
-        shot_speed = np.sqrt(vx * vx + vy * vy) / MAX_PUCK_SPEED  
+        shot_speed = np.sqrt(vx * vx + vy * vy) / MAX_PUCK_SPEED
         theta_v = math.atan2(vy, vx)  # Direction of puck's velocity.
-        
+
         # For player two, assume its goal is at the left side, i.e. at (0, CENTER_Y).
         goal_center = (0, CENTER_Y)
         dx = goal_center[0] - self.puck.position[0]
         dy = goal_center[1] - self.puck.position[1]
         theta_goal = math.atan2(dy, dx)
-        
+
         # Angular error between the puck's velocity and the direction to player two's goal.
         angle_error = abs(theta_v - theta_goal)
-        
+
         # Adjust the angular error based on proximity to the top or bottom wall
         # (to reduce penalty when bank shots are likely).
         distance_to_wall = min(self.puck.position[1], H - self.puck.position[1])
         threshold = H / 4  # Threshold distance below which bank shots are considered.
-        bank_factor = distance_to_wall / threshold if distance_to_wall < threshold else 1.0
-        
+        bank_factor = (
+            distance_to_wall / threshold if distance_to_wall < threshold else 1.0
+        )
+
         # Shot quality: higher when the puck moves fast and its (weighted) angular error is small.
         shot_quality = shot_speed * (1 - bank_factor * angle_error / math.pi)
-        
+
         # Early touch bonus: incentivizes acquiring the puck quickly.
         early_touch = touch * (self.max_timesteps - self.time) / self.max_timesteps
-        
+
         reward = (
-            base +
-            0.3 * closeness +
-            3.0 * touch +
-            1.5 * direction +
-            2.0 * puck_progress +
-            sustained_possession +
-            1.5 * shot_quality +
-            0.5 * early_touch -
-            0.01  # Small constant penalty to encourage urgency.
+            base
+            + 0.3 * closeness
+            + 3.0 * touch
+            + 1.5 * direction
+            + 2.0 * puck_progress
+            + sustained_possession
+            + 1.5 * shot_quality
+            + 0.5 * early_touch
+            - 0.01  # Small constant penalty to encourage urgency.
         )
-        
+
         return float(reward)
-       
+
     def get_reward(self, info: Dict[str, Any]) -> float:
         """Return the reward for player one (the 'main' agent)."""
         if self.reward == "basic":
@@ -1198,6 +1540,14 @@ class HockeyEnv(gym.Env, EzPickle):
             return self._get_reward_04(info)
         elif self.reward == "05":
             return self._get_reward_05(info)
+        elif self.reward == "defensive":
+            return self._get_reward_defensive(info)
+        elif self.reward == "aggressive":
+            return self._get_reward_aggressive(info)
+        elif self.reward == "possession":
+            return self._get_reward_possession(info)
+        elif self.reward == "counterattack":
+            return self._get_reward_counterattack(info)
         else:
             # Should not happen if we validated reward in constructor
             return 0.0
@@ -1220,6 +1570,14 @@ class HockeyEnv(gym.Env, EzPickle):
             return self._get_reward_04_two(info_two)
         elif self.reward == "05":
             return self._get_reward_05_two(info_two)
+        elif self.reward == "defensive":
+            return self._get_reward_defensive(info_two)
+        elif self.reward == "aggressive":
+            return self._get_reward_aggressive(info_two)
+        elif self.reward == "possession":
+            return self._get_reward_possession_two(info_two)
+        elif self.reward == "counterattack":
+            return self._get_reward_counterattack_two(info_two)
         else:
             return 0.0
 
@@ -1616,7 +1974,7 @@ class BasicOpponent:
 
 
 class HumanOpponent:
-    def __init__(self, env, player=1, reward = "basic"):
+    def __init__(self, env, player=1, reward="basic"):
         import pygame
 
         self.env = env
@@ -1655,12 +2013,14 @@ class HumanOpponent:
                 action = self.key_action_mapping[key]
         return self.env.discrete_to_continous_action(action)
 
+
 class BasicDefenseOpponent:
     """
     In attack mode, the opponent uses a defensive strategy:
     It always runs straight toward its own net.
     In the mirrored observation space, this fixed target is set to (-210/SCALE, 0).
     """
+
     def __init__(self, keep_mode=True):
         self.keep_mode = keep_mode
         self.kp = 0.5
@@ -1678,7 +2038,9 @@ class BasicDefenseOpponent:
         target = np.array([target_pos[0], target_pos[1], target_angle])
         error = target - p
         time_to_break = 0.1
-        need_break = np.abs(error / (v + 0.01)) < np.array([time_to_break, time_to_break, time_to_break * 10])
+        need_break = np.abs(error / (v + 0.01)) < np.array(
+            [time_to_break, time_to_break, time_to_break * 10]
+        )
         action = np.clip(
             error * np.array([self.kp, self.kp / 5, self.kp / 2])
             - v * need_break * np.array([self.kd, self.kd, self.kd]),
@@ -1698,6 +2060,7 @@ class BasicAttackOpponent:
     It always runs toward the middle of the field and tries to shoot.
     In the mirrored observation space, the middle is at (0,0).
     """
+
     def __init__(self, keep_mode=True):
         self.keep_mode = keep_mode
         self.kp = 0.5
@@ -1712,7 +2075,9 @@ class BasicAttackOpponent:
         target = np.array([target_pos[0], target_pos[1], target_angle])
         error = target - p
         time_to_break = 0.1
-        need_break = np.abs(error / (v + 0.01)) < np.array([time_to_break, time_to_break, time_to_break * 10])
+        need_break = np.abs(error / (v + 0.01)) < np.array(
+            [time_to_break, time_to_break, time_to_break * 10]
+        )
         action = np.clip(
             error * np.array([self.kp, self.kp / 5, self.kp / 2])
             - v * need_break * np.array([self.kd, self.kd, self.kd]),
@@ -1725,8 +2090,130 @@ class BasicAttackOpponent:
             return np.hstack([action, [shoot]])
         else:
             return action
-        
-        
+
+
+class HockeyReplayEnv(HockeyEnv):
+    """
+    Extension of HockeyEnv that supports replaying recorded games.
+    """
+
+    def __init__(self, game_data=None):
+        super().__init__()
+        self.game_data = game_data
+        self.current_round = 0
+        self.current_step = 0
+        self.replay_mode = False
+
+    def load_game(self, game_data):
+        """Load a recorded game for replay.
+
+        Args:
+            game_data (dict): Dictionary containing recorded game data with actions and observations
+                             for each round.
+        """
+        self.game_data = game_data
+        self.current_round = 0
+        self.current_step = 0
+        self.replay_mode = True
+
+        # Reset to initial state of first round
+        if f"observations_round_0" in game_data:
+            initial_state = game_data["observations_round_0"][0]
+            self.reset()
+            self.set_state(initial_state)
+
+    def replay_step(self):
+        """Execute next step in the replay sequence.
+
+        Returns:
+            tuple: (observation, reward, done, truncated, info) for the replayed step,
+                  or (None, None, True, False, {}) if replay is complete
+        """
+        if not self.replay_mode or self.game_data is None:
+            raise RuntimeError("Not in replay mode or no game data loaded")
+
+        # Check if we've reached the end of all rounds
+        if self.current_round >= self.game_data["num_rounds"]:
+            return None, None, True, False, {}
+
+        # Get current round's actions and observations
+        actions_key = f"actions_round_{self.current_round}"
+        observations_key = f"observations_round_{self.current_round}"
+
+        actions = self.game_data[actions_key]
+        observations = self.game_data[observations_key]
+
+        # Check if we've reached the end of current round
+        if self.current_step >= len(actions):
+            self.current_round += 1
+            self.current_step = 0
+            if self.current_round < self.game_data["num_rounds"]:
+                # Set initial state of next round
+                next_obs_key = f"observations_round_{self.current_round}"
+                initial_state = self.game_data[next_obs_key][0]
+                self.reset()
+                self.set_state(initial_state)
+            return self.replay_step()
+
+        # Execute the recorded action
+        action = actions[self.current_step]
+        self.current_step += 1
+
+        return self.step(action)
+
+    def render_replay(self, mode="human", fps=50):
+        """Render the entire replay from start to finish.
+
+        Args:
+            mode (str): Rendering mode ('human' or 'rgb_array')
+            fps (int): Frames per second for replay
+        """
+        import time
+
+        if not self.replay_mode or self.game_data is None:
+            raise RuntimeError("Not in replay mode or no game data loaded")
+
+        # Reset to beginning
+        self.current_round = 0
+        self.current_step = 0
+
+        # Load initial state
+        initial_state = self.game_data["observations_round_0"][0]
+        self.reset()
+        self.set_state(initial_state)
+
+        frame_delay = 1.0 / fps
+        done = False
+
+        while not done:
+            start_time = time.time()
+
+            obs, reward, done, truncated, info = self.replay_step()
+            if done:
+                break
+
+            self.render(mode=mode)
+
+            # Control frame rate
+            elapsed = time.time() - start_time
+            if elapsed < frame_delay:
+                time.sleep(frame_delay - elapsed)
+
+
+def replay_game(game_data, render_mode="human", fps=50):
+    """Convenience function to replay a recorded game.
+
+    Args:
+        game_data (dict): Dictionary containing recorded game data
+        render_mode (str): Rendering mode ('human' or 'rgb_array')
+        fps (int): Frames per second for replay
+    """
+    env = HockeyReplayEnv()
+    env.load_game(game_data)
+    env.render_replay(mode=render_mode, fps=fps)
+    env.close()
+
+
 class HockeyEnv_BasicOpponent(HockeyEnv):
     def __init__(self, mode=Mode.NORMAL, weak_opponent=False):
         super().__init__(mode=mode, keep_mode=True)
@@ -1739,6 +2226,7 @@ class HockeyEnv_BasicOpponent(HockeyEnv):
         a2 = self.opponent.act(ob2)
         action2 = np.hstack([action, a2])
         return super().step(action2)
+
 
 from gymnasium.envs.registration import register
 
@@ -1765,4 +2253,3 @@ try:
     )
 except Exception as e:
     print(e)
-

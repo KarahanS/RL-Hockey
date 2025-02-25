@@ -39,6 +39,331 @@ import os
 from pathlib import Path
 
 
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
+import numpy as np
+from hockey_env import HockeyEnv, Mode
+import pickle as pkl
+import os
+from tqdm import tqdm
+
+class HockeyDataset(Dataset):
+    """Dataset for hockey demonstrations"""
+    def __init__(self, demonstrations, mirror_data=True):
+        self.states = []
+        self.actions = []
+        
+        for game_data in demonstrations:
+            num_rounds = game_data['num_rounds'][0][0]
+            
+            for round_idx in range(num_rounds):
+                if f'observations_round_{round_idx}' not in game_data:
+                    continue
+                    
+                observations = game_data[f'observations_round_{round_idx}']
+                actions = game_data[f'actions_round_{round_idx}']
+                sides_swapped = (round_idx % 2 == 1)
+                
+                for i in range(len(observations) - 1):  # -1 because last state has no action
+                    state = observations[i]
+                    action = actions[i]
+                    
+                    # Get player 1's action based on whether sides are swapped
+                    if sides_swapped:
+                        player_action = action[4:] if len(action) == 8 else action[3:]  # 8 for keep_mode
+                    else:
+                        player_action = action[:4] if len(action) == 8 else action[:3]
+                    
+                    self.states.append(state)
+                    self.actions.append(player_action)
+                    
+                    # Mirror augmentation if requested
+                    if mirror_data:
+                        env = HockeyEnv()  # Temporary env for mirroring functions
+                        mirrored_state = env.mirror_state(state)
+                        mirrored_action = env.mirror_action(player_action)
+                        self.states.append(mirrored_state)
+                        self.actions.append(mirrored_action)
+        
+        self.states = torch.FloatTensor(np.array(self.states))
+        self.actions = torch.FloatTensor(np.array(self.actions))
+        
+    def __len__(self):
+        return len(self.states)
+    
+    def __getitem__(self, idx):
+        return self.states[idx], self.actions[idx]
+
+class BehavioralCloningPolicy(nn.Module):
+    def __init__(self, state_dim, action_dim, hidden_sizes=[256, 256]):
+        super().__init__()
+        
+        layers = []
+        prev_size = state_dim
+        
+        for size in hidden_sizes:
+            layers.append(nn.Linear(prev_size, size))
+            layers.append(nn.ReLU())
+            prev_size = size
+            
+        layers.append(nn.Linear(prev_size, action_dim))
+        layers.append(nn.Tanh())  # Hockey actions are in [-1, 1]
+        
+        self.policy = nn.Sequential(*layers)
+        
+    def forward(self, state):
+        return self.policy(state)
+
+class BehavioralCloning:
+    def __init__(
+        self,
+        state_dim,
+        action_dim,
+        hidden_sizes=[256, 256],
+        lr=3e-4,
+        batch_size=256,
+        device="cuda" if torch.cuda.is_available() else "cpu"
+    ):
+        self.device = device
+        self.batch_size = batch_size
+        
+        self.policy = BehavioralCloningPolicy(
+            state_dim=state_dim,
+            action_dim=action_dim,
+            hidden_sizes=hidden_sizes
+        ).to(device)
+        
+        self.optimizer = optim.Adam(self.policy.parameters(), lr=lr)
+        self.loss_fn = nn.MSELoss()
+        
+    def train(self, demonstrations, num_epochs=100, mirror_data=True):
+        """Train the policy using behavioral cloning"""
+        dataset = HockeyDataset(demonstrations, mirror_data=mirror_data)
+        dataloader = DataLoader(
+            dataset,
+            batch_size=self.batch_size,
+            shuffle=True
+        )
+        
+        print(f"Training on {len(dataset)} state-action pairs...")
+        
+        for epoch in range(num_epochs):
+            total_loss = 0
+            num_batches = 0
+            
+            for states, actions in tqdm(dataloader, desc=f"Epoch {epoch+1}/{num_epochs}"):
+                states = states.to(self.device)
+                actions = actions.to(self.device)
+                
+                self.optimizer.zero_grad()
+                
+                predicted_actions = self.policy(states)
+                loss = self.loss_fn(predicted_actions, actions)
+                
+                loss.backward()
+                self.optimizer.step()
+                
+                total_loss += loss.item()
+                num_batches += 1
+            
+            avg_loss = total_loss / num_batches
+            print(f"Epoch {epoch+1}/{num_epochs}, Average Loss: {avg_loss:.6f}")
+            
+    def save(self, path):
+        """Save the policy"""
+        torch.save({
+            'policy_state_dict': self.policy.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+        }, path)
+        
+    def load(self, path):
+        """Load a saved policy"""
+        checkpoint = torch.load(path, map_location=self.device)
+        self.policy.load_state_dict(checkpoint['policy_state_dict'])
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        
+    def act(self, state):
+        """Get action for a single state"""
+        with torch.no_grad():
+            state = torch.FloatTensor(state).unsqueeze(0).to(self.device)
+            action = self.policy(state)
+            return action.cpu().numpy()[0]
+
+# Example usage:
+def train_behavioral_cloning(game_data_dir, save_path):
+    """Train a behavioral cloning policy from demonstrations"""
+    # Load game data
+    demonstrations = []
+    for file in os.listdir(game_data_dir):
+        if file.endswith('.pkl'):
+            with open(os.path.join(game_data_dir, file), 'rb') as f:
+                data = pkl.load(f)
+                demonstrations.append(data)
+    
+    # Create environment to get dimensions
+    env = HockeyEnv()
+    state_dim = env.observation_space.shape[0]
+    action_dim = env.action_space.shape[0] // 2  # Only player 1's actions
+    
+    # Initialize and train BC agent
+    bc_agent = BehavioralCloning(
+        state_dim=state_dim,
+        action_dim=action_dim,
+        hidden_sizes=[256, 256],
+        lr=3e-4,
+        batch_size=256
+    )
+    
+    # Train
+    bc_agent.train(demonstrations, num_epochs=100)
+    
+    # Save the trained policy
+    bc_agent.save(save_path)
+    return bc_agent
+
+def evaluate_bc_policy(bc_agent, env, num_episodes=100):
+    """Evaluate a behavioral cloning policy"""
+    total_rewards = []
+    wins = 0
+    
+    for episode in range(num_episodes):
+        obs, _ = env.reset()
+        episode_reward = 0
+        done = False
+        
+        while not done:
+            action = bc_agent.act(obs)
+            # Create full action (agent + opponent actions)
+            full_action = np.concatenate([action, np.zeros_like(action)])  # Zero opponent action
+            obs, reward, done, _, info = env.step(full_action)
+            episode_reward += reward
+            
+            if done and 'winner' in info and info['winner'] == 1:
+                wins += 1
+                
+        total_rewards.append(episode_reward)
+        
+    avg_reward = np.mean(total_rewards)
+    win_rate = wins / num_episodes
+    
+    print(f"Average Reward: {avg_reward:.2f}")
+    print(f"Win Rate: {win_rate:.2f}")
+    return avg_reward, win_rate
+
+
+
+def set_env_state(env, observation):
+    """
+    Set the environment state based on observation. 
+    Assumes standard hockey observation format.
+    """
+    CENTER_X, CENTER_Y = 0, 0  # Center of the hockey rink
+    
+    # Extract positions and other physics properties from observation
+    abs_x1, abs_y1 = observation[0] + CENTER_X, observation[1] + CENTER_Y
+    abs_x2, abs_y2 = observation[6] + CENTER_X, observation[7] + CENTER_Y
+    abs_xp, abs_yp = observation[12] + CENTER_X, observation[13] + CENTER_Y
+    
+    # Set player 1 state
+    env.player1.position = (abs_x1, abs_y1)
+    env.player1.angle = observation[2]
+    env.player1.linearVelocity = (observation[3], observation[4])
+    env.player1.angularVelocity = observation[5]
+    
+    # Set player 2 state
+    env.player2.position = (abs_x2, abs_y2)
+    env.player2.angle = observation[8]
+    env.player2.linearVelocity = (observation[9], observation[10])
+    env.player2.angularVelocity = observation[11]
+    
+    # Set puck state
+    env.puck.position = (abs_xp, abs_yp)
+    env.puck.linearVelocity = (observation[14], observation[15])
+    
+    # Set which player has the puck (if available in observation)
+    if len(observation) > 16:
+        env.player1_has_puck = observation[16]
+        env.player2_has_puck = observation[17]
+        
+def process_game_data_for_sac_buffer(data, reward_type="01", keep_mode=True):
+    """
+    Process game data from recorded games to initialize an SAC replay buffer.
+    
+    Args:
+        data: Dictionary containing game data from pkl files
+        reward_type: Reward type to use from the hockey environment
+        keep_mode: Whether to use keep_mode in the hockey environment
+    
+    Returns:
+        List of (obs, action, reward, next_obs, done) tuples
+    """
+    # Create a temp hockey environment to compute rewards
+    env = HockeyEnv(mode=Mode.NORMAL, keep_mode=keep_mode, reward=reward_type)
+    
+    transitions = []
+    
+    for game_id, game_data in data.items():
+        print(f"Processing game: {game_id}")
+        num_rounds = game_data['num_rounds'][0][0]
+        print(f"Game has {num_rounds} rounds")
+        
+        for round_idx in range(num_rounds):
+            print(f"  Processing round {round_idx + 1}...")
+            
+            # Check if keys exist for this round
+            if f'observations_round_{round_idx}' not in game_data or f'actions_round_{round_idx}' not in game_data:
+                print(f"  Missing data for round {round_idx}, skipping...")
+                continue
+                
+            observations = game_data[f'observations_round_{round_idx}']
+            actions = game_data[f'actions_round_{round_idx}']
+            
+            if len(observations) <= 1 or len(actions) <= 1:
+                print(f"  Not enough steps in round {round_idx}, skipping...")
+                continue
+                
+            # Determine if sides are swapped (in odd rounds)
+            sides_swapped = (round_idx % 2 == 1)
+            
+            # Process each transition in this round
+            for step_idx in range(len(observations) - 1):
+                obs = observations[step_idx]
+                action = actions[step_idx]
+                next_obs = observations[step_idx + 1]
+                
+                # Reset the environment and set the state
+                env.reset()
+                
+                # Set state in the environment (to compute rewards)
+                set_env_state(env, obs)
+                
+                # Get the appropriate player1 action
+                if sides_swapped:
+                    # In swapped rounds, player 1's actions are in the second half
+                    player1_actions = action[4:] if keep_mode else action[3:]
+                else:
+                    # In normal rounds, player 1's actions are in the first half
+                    player1_actions = action[:4] if keep_mode else action[:3]
+                
+                # Prepare the full action to compute step
+                if sides_swapped:
+                    p1_action = action[4:] if keep_mode else action[3:]
+                    p2_action = action[:4] if keep_mode else action[:3]
+                    full_action = np.concatenate([p1_action, p2_action])
+                else:
+                    full_action = action
+                
+                # Take a step in the env to compute reward
+                _, reward, done, _, info = env.step(full_action)
+                
+                # Store transition
+                # For SAC buffer, we only need player1's side of the action
+                transitions.append((obs, player1_actions, reward, next_obs, done))
+    
+    print(f"Processed a total of {len(transitions)} transitions")
+    return transitions
 
 
 class PrioritizedOpponentBuffer():
@@ -1354,7 +1679,405 @@ class Trainer:
         self.plot_metrics()
 
 
+    def train_self_play_mode5(self):
+        """
+        Self-play mode 5:
+        1) Load game data from pkl files and initialize replay buffer
+        2) Create a PrioritizedOpponentBuffer (D-UCB)
+        3) Add basic weak + strong opponents
+        4) Load all SAC opponents found in --sp_opponents_folder, add them to buffer
+        5) Train the main agent as in mode4, but starting with a pre-filled buffer
+        """
+        print("[Mode 5] Loading game data to initialize replay buffer...")
+        
+        # Load game data from pkl files in the specified directory
+        import os
+        import pickle as pkl
+        
+        directory = "game_data"  # You might want to make this configurable
+        files = [f for f in os.listdir(directory) if f.endswith('.pkl')]
+        print(f"Found {len(files)} pkl files")
+        
+        # Load all pkl files
+        data = {}
+        for file in files:
+            with open(os.path.join(directory, file), 'rb') as f:
+                data[file] = pkl.load(f)
+        
+        # Process game data into transitions
+        from hockey_env import Mode
+        transitions = process_game_data_for_sac_buffer(
+            data, 
+            reward_type=self.args.reward,
+            keep_mode=self.args.keep_mode
+        )
+        
+        print(f"Processed {len(transitions)} transitions from game data")
+        
+        # Store transitions in the agent's replay buffer
+        for transition in transitions:
+            obs, action, reward, next_obs, done = transition
+            self.agent.store_transition((obs, action, reward, next_obs, done))
+            
+            # If mirroring is enabled, store mirrored transitions too
+            if self.args.mirror:
+                mirrored_obs = self.env.mirror_state(obs)
+                mirrored_action = self.env.mirror_action(action)
+                mirrored_next_obs = self.env.mirror_state(next_obs)
+                self.agent.store_transition(
+                    (mirrored_obs, mirrored_action, reward, mirrored_next_obs, done)
+                )
+        
+        print(f"Replay buffer now contains {len(self.agent.buffer)} transitions")
+        
+        # 1) Create the D-UCB buffer for opponents
+        self.ducb_buffer = PrioritizedOpponentBuffer(
+            B=1, 
+            xi=1, 
+            gamma=0.95, 
+            tau=1000
+        )
 
+        # 2) Add the basic opponents
+        opp_weak = BasicOpponent(weak=True, keep_mode=self.args.keep_mode)
+        opp_strong = BasicOpponent(weak=False, keep_mode=self.args.keep_mode)
+        opp_basicattack = BasicAttackOpponent(keep_mode=self.args.keep_mode)
+        opp_basicdefense = BasicDefenseOpponent(keep_mode=self.args.keep_mode)
+        self.ducb_buffer.add_opponent(opp_weak)
+        self.ducb_buffer.add_opponent(opp_strong)
+        self.ducb_buffer.add_opponent(opp_basicattack)
+        self.ducb_buffer.add_opponent(opp_basicdefense)
+
+        # 3) Load any SAC opponents from folder
+        if self.args.sp_opponents_folder.strip():
+            loaded_opponents = self.load_all_sac_opponents_from_folder(
+                self.args.sp_opponents_folder, 
+                env=self.env
+            )
+            for opp in loaded_opponents:
+                self.ducb_buffer.add_opponent(opp)
+
+        # Parameters
+        wr_opponent_thresh = self.args.sp_wr_threshold
+        n_update = self.args.sp_n_update
+        episode = 0
+        episodes_since_sampling = 0
+        
+        # Initial evaluation of win rates
+        for idx_op, op in enumerate(self.ducb_buffer.opponents):
+            wr_i = self.evaluate_win_rate(self.agent, op, self.args.eval_episodes)
+            msg = f"[Eval] Start: vs opponent {idx_op} -> WR={wr_i:.3f}"
+            print(msg)
+            with open(self.log_file, "a") as f:
+                f.write(msg + "\n")
+
+        # Training Loop (same as mode 4)
+        while episode < self.args.max_episodes:
+            for local_ep in range(self.args.sp_min_epochs):
+                episode += 1
+                obs, _info = self.env.reset()
+                self.agent.K = 0
+                total_reward = 0.0
+
+                # Get opponent from buffer using D-UCB
+                opp_idx, opponent = self.ducb_buffer.get_opponent()
+
+                for t in range(self.args.max_timesteps):
+                    agent_action = self.agent.act(obs, eval_mode=False, rollout=True)
+
+                    if hasattr(self.env, "obs_agent_two"):
+                        opp_obs = self.env.obs_agent_two()
+                    else:
+                        opp_obs = obs
+                    opp_action = opponent.act(opp_obs)
+
+                    full_action = np.hstack([agent_action, opp_action])
+                    next_obs, reward, done, trunc, info = self.env.step(full_action)
+                    total_reward += reward
+
+                    self.agent.store_transition((obs, agent_action, reward, next_obs, done))
+
+                    # Mirror augmentation if requested
+                    if self.args.mirror:
+                        mirrored_obs = self.env.mirror_state(obs)
+                        mirrored_agent_action = self.env.mirror_action(agent_action)
+                        mirrored_next_obs = self.env.mirror_state(next_obs)
+                        self.agent.store_transition(
+                            (mirrored_obs, mirrored_agent_action, reward, mirrored_next_obs, done)
+                        )
+
+                    self.agent.K += 1
+                    obs = next_obs
+                    if done or trunc:
+                        break
+
+                # Train the agent
+                self.losses.extend(self.agent.train(self.agent.K))
+                self.rewards.append(total_reward)
+                self.lengths.append(t)
+
+                # Register outcome in D-UCB
+                outcome = 0.0
+                if "winner" in info:
+                    if info["winner"] == 1:
+                        outcome = 1.0
+                    elif info["winner"] == 0:
+                        outcome = 0.5
+                    else:
+                        outcome = 0.0
+                self.ducb_buffer.register_outcome(opp_idx, outcome)
+
+                # Check if we should evaluate and possibly add a new clone
+                episodes_since_sampling += 1
+                if episodes_since_sampling >= n_update:
+                    episodes_since_sampling = 0
+                    # Evaluate agent vs all opponents
+                    all_good = True
+                    for idx_op, op in enumerate(self.ducb_buffer.opponents):
+                        wr_i = self.evaluate_win_rate(self.agent, op, self.args.eval_episodes)
+                        if wr_i < wr_opponent_thresh:
+                            all_good = False
+                            break
+                    if all_good:
+                        print(f"[Mode5] Episode {episode}: Agent >= {wr_opponent_thresh} vs all. Adding new clone.")
+                        new_clone = self.copy_agent(self.agent)
+                        self.ducb_buffer.add_opponent(new_clone)
+
+                # Regular evaluation if requested
+                if self.args.eval_interval > 0 and episode % self.args.eval_interval == 0:
+                    wr_strong = self.evaluate_win_rate(self.agent, opp_strong, self.args.eval_episodes)
+                    msg = f"[Eval] Episode {episode} vs Strong -> WR={wr_strong:.3f}"
+                    print(msg)
+                    with open(self.log_file, "a") as f:
+                        f.write(msg + "\n")
+
+                # Checkpoint & logging 
+                if episode % self.args.save_interval == 0:
+                    self.save_checkpoint(episode)
+                    self.plot_metrics()
+
+                if episode % self.args.log_interval == 0:
+                    avg_reward = np.mean(self.rewards[-self.args.log_interval:])
+                    avg_length = int(np.mean(self.lengths[-self.args.log_interval:]))
+                    log_msg = (
+                        f"[Mode5] Episode {episode} avg_length={avg_length}, reward={avg_reward:.2f}"
+                    )
+                    print(log_msg)
+                    with open(self.log_file, "a") as f:
+                        f.write(log_msg + "\n")
+
+                if episode >= self.args.max_episodes:
+                    break
+
+        # Done
+        self.save_checkpoint("final")
+        self.plot_metrics()
+
+
+    def train_self_play_mode6(self):
+        """
+        Self-play mode 6:
+        1) Pre-train the agent using behavioral cloning on game data
+        2) Transfer the learned policy to SAC actor network
+        3) Create a PrioritizedOpponentBuffer (D-UCB)
+        4) Add basic opponents + load SAC opponents from folder
+        5) Continue training with RL using the pre-trained policy
+        """
+        print("[Mode 6] Starting with behavioral cloning pre-training...")
+        
+        # Load game data
+        directory = self.args.game_data_dir
+        files = [f for f in os.listdir(directory) if f.endswith('.pkl')]
+        print(f"Found {len(files)} pkl files")
+        
+        demonstrations = []
+        for file in files:
+            with open(os.path.join(directory, file), 'rb') as f:
+                data = pkl.load(f)
+                demonstrations.append(data)
+        
+        # Initialize BC agent with same architecture as SAC actor
+        bc_agent = BehavioralCloning(
+            state_dim=self.env.observation_space.shape[0],
+            action_dim=self.env.action_space.shape[0] // 2,  # Only player 1's actions
+            hidden_sizes=list(map(int, self.args.hidden_sizes_actor.split(","))),
+            lr=self.args.lr,
+            batch_size=self.args.batch_size,
+            device=device
+        )
+        
+        # Train BC agent
+        print("Training behavioral cloning policy...")
+        bc_agent.train(
+            demonstrations=demonstrations,
+            num_epochs=50,  # Adjust as needed
+            mirror_data=self.args.mirror
+        )
+        
+        # Save BC policy for later use if needed
+        bc_save_path = self.output_dir / "bc_policy.pth"
+        bc_agent.save(bc_save_path)
+        
+        # Evaluate BC policy before continuing
+        print("\nEvaluating BC policy...")
+        bc_wr_weak = self.evaluate_win_rate(bc_agent, BasicOpponent(weak=True), self.args.eval_episodes)
+        bc_wr_strong = self.evaluate_win_rate(bc_agent, BasicOpponent(weak=False), self.args.eval_episodes)
+        print(f"BC Policy Win Rates - vs Weak: {bc_wr_weak:.3f}, vs Strong: {bc_wr_strong:.3f}")
+        
+        # Transfer BC policy to SAC actor
+        print("\nTransferring BC policy to SAC actor...")
+        # Copy weights from BC policy to SAC actor
+        with torch.no_grad():
+            # Match layers between BC policy and SAC actor
+            for bc_param, sac_param in zip(bc_agent.policy.parameters(), self.agent.actor.trunk.parameters()):
+                sac_param.data.copy_(bc_param.data)
+        
+        # Now continue with self-play training using the pre-trained policy
+        print("\nStarting self-play training with pre-trained policy...")
+        
+        # Create D-UCB buffer for opponents
+        self.ducb_buffer = PrioritizedOpponentBuffer(
+            B=1, 
+            xi=1, 
+            gamma=0.95, 
+            tau=1000
+        )
+
+        # Add basic opponents
+        opp_weak = BasicOpponent(weak=True, keep_mode=self.args.keep_mode)
+        opp_strong = BasicOpponent(weak=False, keep_mode=self.args.keep_mode)
+        opp_basicattack = BasicAttackOpponent(keep_mode=self.args.keep_mode)
+        opp_basicdefense = BasicDefenseOpponent(keep_mode=self.args.keep_mode)
+        self.ducb_buffer.add_opponent(opp_weak)
+        self.ducb_buffer.add_opponent(opp_strong)
+        self.ducb_buffer.add_opponent(opp_basicattack)
+        self.ducb_buffer.add_opponent(opp_basicdefense)
+
+        # Load any additional SAC opponents
+        if self.args.sp_opponents_folder.strip():
+            loaded_opponents = self.load_all_sac_opponents_from_folder(
+                self.args.sp_opponents_folder, 
+                env=self.env
+            )
+            for opp in loaded_opponents:
+                self.ducb_buffer.add_opponent(opp)
+
+        # Training parameters
+        wr_opponent_thresh = self.args.sp_wr_threshold
+        n_update = self.args.sp_n_update
+        episode = 0
+        episodes_since_sampling = 0
+        
+        # Initial evaluation
+        for idx_op, op in enumerate(self.ducb_buffer.opponents):
+            wr_i = self.evaluate_win_rate(self.agent, op, self.args.eval_episodes)
+            msg = f"[Eval] Start: vs opponent {idx_op} -> WR={wr_i:.3f}"
+            print(msg)
+            with open(self.log_file, "a") as f:
+                f.write(msg + "\n")
+
+        # Main training loop
+        while episode < self.args.max_episodes:
+            for local_ep in range(self.args.sp_min_epochs):
+                episode += 1
+                obs, _info = self.env.reset()
+                self.agent.K = 0
+                total_reward = 0.0
+
+                # Get opponent using D-UCB
+                opp_idx, opponent = self.ducb_buffer.get_opponent()
+
+                for t in range(self.args.max_timesteps):
+                    agent_action = self.agent.act(obs, eval_mode=False, rollout=True)
+
+                    if hasattr(self.env, "obs_agent_two"):
+                        opp_obs = self.env.obs_agent_two()
+                    else:
+                        opp_obs = obs
+                    opp_action = opponent.act(opp_obs)
+
+                    full_action = np.hstack([agent_action, opp_action])
+                    next_obs, reward, done, trunc, info = self.env.step(full_action)
+                    total_reward += reward
+
+                    self.agent.store_transition((obs, agent_action, reward, next_obs, done))
+
+                    # Mirror augmentation if requested
+                    if self.args.mirror:
+                        mirrored_obs = self.env.mirror_state(obs)
+                        mirrored_agent_action = self.env.mirror_action(agent_action)
+                        mirrored_next_obs = self.env.mirror_state(next_obs)
+                        self.agent.store_transition(
+                            (mirrored_obs, mirrored_agent_action, reward, mirrored_next_obs, done)
+                        )
+
+                    self.agent.K += 1
+                    obs = next_obs
+                    if done or trunc:
+                        break
+
+                # Train the agent
+                self.losses.extend(self.agent.train(self.agent.K))
+                self.rewards.append(total_reward)
+                self.lengths.append(t)
+
+                # Register outcome in D-UCB
+                outcome = 0.0
+                if "winner" in info:
+                    if info["winner"] == 1:
+                        outcome = 1.0
+                    elif info["winner"] == 0:
+                        outcome = 0.5
+                    else:
+                        outcome = 0.0
+                self.ducb_buffer.register_outcome(opp_idx, outcome)
+
+                # Evaluate and possibly add new clone
+                episodes_since_sampling += 1
+                if episodes_since_sampling >= n_update:
+                    episodes_since_sampling = 0
+                    # Evaluate vs all opponents
+                    all_good = True
+                    for idx_op, op in enumerate(self.ducb_buffer.opponents):
+                        wr_i = self.evaluate_win_rate(self.agent, op, self.args.eval_episodes)
+                        if wr_i < wr_opponent_thresh:
+                            all_good = False
+                            break
+                    if all_good:
+                        print(f"[Mode6] Episode {episode}: Agent >= {wr_opponent_thresh} vs all. Adding new clone.")
+                        new_clone = self.copy_agent(self.agent)
+                        self.ducb_buffer.add_opponent(new_clone)
+
+                # Regular evaluation
+                if self.args.eval_interval > 0 and episode % self.args.eval_interval == 0:
+                    wr_strong = self.evaluate_win_rate(self.agent, opp_strong, self.args.eval_episodes)
+                    msg = f"[Eval] Episode {episode} vs Strong -> WR={wr_strong:.3f}"
+                    print(msg)
+                    with open(self.log_file, "a") as f:
+                        f.write(msg + "\n")
+
+                # Checkpoint & logging 
+                if episode % self.args.save_interval == 0:
+                    self.save_checkpoint(episode)
+                    self.plot_metrics()
+
+                if episode % self.args.log_interval == 0:
+                    avg_reward = np.mean(self.rewards[-self.args.log_interval:])
+                    avg_length = int(np.mean(self.lengths[-self.args.log_interval:]))
+                    log_msg = (
+                        f"[Mode6] Episode {episode} avg_length={avg_length}, reward={avg_reward:.2f}"
+                    )
+                    print(log_msg)
+                    with open(self.log_file, "a") as f:
+                        f.write(log_msg + "\n")
+
+                if episode >= self.args.max_episodes:
+                    break
+
+        # Done
+        self.save_checkpoint("final")
+        self.plot_metrics()
+    
     def evaluate_win_rate(self, agent, opponent, eval_episodes=100, render=False):
         """
         Evaluate the fraction of episodes that 'agent' wins against 'opponent'
@@ -1546,6 +2269,8 @@ def main():
             trainer.train_self_play_mode3()
         elif args.sp_mode == 4:
             trainer.train_self_play_mode4()
+        elif args.sp_mode == 5:
+            trainer.train_self_play_mode5()
         else:
             print(f"Unknown self_play_mode={args.sp_mode}, defaulting to mode 1.")
             trainer.train_self_play()

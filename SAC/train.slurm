@@ -5,7 +5,7 @@
 #SBATCH --partition=week   
 #SBATCH --mem-per-cpu=3G   # max 251GB per node
 #SBATCH --gres=gpu:1        # each node has 4 gpus
-#SBATCH --time=48:00:00  # 48 hours
+#SBATCH --time=144:00:00  # 48 hours
 #SBATCH --error=slurm/%J-%x.err
 #SBATCH --output=slurm/%J-%x.out
 
