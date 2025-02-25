@@ -21,7 +21,7 @@ This repository implements three state-of-the-art reinforcement learning algorit
 
 ## Notable Achievement
 
-Our SAC implementation (Muhteshember-SAC) ranked 5th among 140+ competing agents in the official [tournament leaderboard](https://comprl.cs.uni-tuebingen.de/leaderboard/). In a nutshell, we used automatic entropy tuning, pink noise, augmented custom reward, mirrored state-action pairs, and a prioritized opponent buffer with discounted upper confidence bound (discounted-UCB) sampling for self-play training.
+Our SAC implementation (Muhteshember-SAC) ranked 5th among 140+ competing agents in the official [tournament leaderboard](https://comprl.cs.uni-tuebingen.de/leaderboard/). In a nutshell, we used automatic entropy tuning, pink noise, augmented custom reward, mirrored state-action pairs, and a prioritized opponent buffer with discounted upper confidence bound (Discounted-UCB) sampling for self-play training.
 
 ## Documentation
 
