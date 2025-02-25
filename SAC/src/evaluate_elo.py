@@ -364,7 +364,7 @@ def main():
 
     # 5) Save match results
     import json
-    with open("match_results_en_son.json", "w") as f:
+    with open("match_results.json", "w") as f:
         json.dump(match_results, f, indent=2)
 
     # 6) Sort and print final TrueSkill
@@ -381,7 +381,7 @@ def main():
         print(f"  {p['name']}: mu={r.mu:.2f}, sigma={r.sigma:.2f}, LCB={lcb:.2f}")
 
     # Also save final ratings to a file
-    with open("final_ratings_en_son.txt", "w") as fr:
+    with open("final_ratings.txt", "w") as fr:
         fr.write("Final TrueSkill ratings:\n\n")
         for p in players:
             r = p["rating"]
