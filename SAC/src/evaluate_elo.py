@@ -29,13 +29,45 @@ import sys
 sys.path.append("../")  
 
 # import your agent classes
-from DDQN.DDQN import DoubleDuelingDQNAgent
+from DDQN.dqn_action_space import CustomActionSpace
+from DDQN.DDQN import DoubleDuelingDQNAgent, DuelingDQNAgent
+from DDQN.DQN import DoubleDQNAgent, TargetDQNAgent, DQNAgent
 from TD3.src.td3 import TD3
 from hockey_env import HockeyEnv, Mode, BasicOpponent
 from sac import SACAgent
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+def load_ddqn_agent(config_path, checkpoint_path, env, type=DoubleDuelingDQNAgent):
+    dqn_classes = {
+        "dqn": DQNAgent,
+        "targ-dqn": TargetDQNAgent,
+        "doub-dqn": DoubleDQNAgent,
+        "duel-dqn": DuelingDQNAgent,
+        "doub-duel-dqn": DoubleDuelingDQNAgent,
+    }
+    
+    if type != DoubleDuelingDQNAgent:
+        raise ValueError("Only DoubleDuelingDQNAgent is supported for now.")
+    
+    if "custactspc" in checkpoint_path:
+        act_space = CustomActionSpace()
+    else:
+        act_space = env.discrete_action_space
+    
+    agent = type(
+        env.observation_space,
+        act_space,
+        hidden_sizes=[512],
+        hidden_sizes_A=[512, 512],
+        hidden_sizes_V=[512, 512],
+        use_torch=True,
+    )
+    agent.load_state(checkpoint_path)
+    print(f"[DDQN] Loaded agent from checkpoint: {checkpoint_path}")
+    return agent
+    
+    
 
 def load_sac_agent(config_path, checkpoint_path, env):
     """
@@ -44,7 +76,7 @@ def load_sac_agent(config_path, checkpoint_path, env):
     If it fails (e.g. KeyError, structure mismatch), the caller can catch and
     attempt a different loader (like TD3).
     """
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     if "config" in checkpoint:
         config = checkpoint["config"]
         print(f"[SAC] Found config in checkpoint: {checkpoint_path}")
@@ -231,7 +263,6 @@ def main():
         "rating": trueskill.Rating()
     })
     
-    
 
     # 3) For each .pth file, attempt to load as SAC or TD3
     for ckpt in checkpoints:
@@ -249,8 +280,11 @@ def main():
         else:
             used_config = Path(args.agent_config)
 
-        # Try loading as SAC first
-        if not configflag:
+
+        if "ckpt" in str(ckpt): # DDQN
+            tmp_agent = load_ddqn_agent(str(used_config), str(ckpt), env)
+            print(f"  => Loaded as DDQN successfully.")
+        elif not configflag:  # Try loading as SAC
             tmp_agent = load_sac_agent(str(used_config), str(ckpt), env)
             print(f"  => Loaded as SAC successfully.")
         else:
