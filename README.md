@@ -30,4 +30,4 @@ For comprehensive documentation including:
 - Extensive ablation and sensitivity studies on hyperparameters
 - Implementation techniques crucial to our competitive performance
 
-Please refer to our [technical report](https://github.com/KarahanS/RL-Hockey/blob/main/assets/RL_Course_24_25_Final_Project_Report.pdf).
+Please refer to our [technical report](https://github.com/KarahanS/RL-Hockey/blob/main/assets/RL_Course_2024_25_Final_Project_Report.pdf).
