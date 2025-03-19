@@ -113,13 +113,14 @@ class CustomHockeyEnv:
 # Trained Opponent Class
 # ============================================
 class TrainedOpponent:
-    def __init__(self, agent, training=False):
+    def __init__(self, agent, training=False, name="trained_agent"):
         """
         Opponent that uses a trained agent to select actions.
         If training is True, this agent will also be trained.
         """
         self.agent = agent
         self.training = training
+        self.name = name
 
     def act(self, observation, add_noise=False):
         """
@@ -159,13 +160,17 @@ def get_opponent(opponent_type, env, trained_agent=None):
         An opponent instance compatible with the environment.
     """
     if opponent_type == "weak":
-        return h_env.BasicOpponent(weak=True)
+        opp = h_env.BasicOpponent(weak=True)
+        opp.name = "weak"
+        return opp
     elif opponent_type == "strong":
-        return h_env.BasicOpponent(weak=False)
+        opp = h_env.BasicOpponent(weak=False)
+        opp.name = "strong"
+        return opp
     elif opponent_type == "trained":
         if trained_agent is None:
             raise ValueError("trained_agent must be provided for 'trained' opponent type.")
-        return TrainedOpponent(trained_agent, training=False)
+        return TrainedOpponent(trained_agent, training=False, name="trained_agent")
     else:
         raise ValueError(f"Unknown opponent type: {opponent_type}")
 
@@ -217,8 +222,11 @@ def eval_policy_extended(
             while not done:
                 agent_action = policy.act(np.array(state), add_noise=False)
                 if opponent is not None:
-                    opponent_obs = eval_env.env.obs_agent_two()
-                    opponent_action = opponent.act(opponent_obs)
+                    if isinstance(opponent, h_env.BasicOpponent):
+                        opponent_action = opponent.act(eval_env.env.obs_agent_two())
+                    else:
+                        opponent_obs = eval_env.env.obs_agent_two()
+                        opponent_action = opponent.act(opponent_obs)
                 else:
                     opponent_action = np.array([0, 0, 0, 0], dtype=np.float32)
 
@@ -363,6 +371,27 @@ def plot_noise_comparison(agent, training_config, env_name, save_path):
         plt.savefig(os.path.join(save_path, f"noise_comparison_dim_{dim}_{env_name}.png"))
         plt.close()
 
+def plot_selfplay_opponent_winrates(sp_winrate_history, save_path, mode):
+    """
+    Plots the self-play win rates for each opponent in the opponent buffer over training blocks.
+    
+    sp_winrate_history: Dict of {opponent_name -> [list_of_winrates]}
+    Each index in the lists corresponds to a training block (50 episodes).
+    """
+    plt.figure(figsize=(10, 6))
+    for opp_name, winrates in sp_winrate_history.items():
+        plt.plot(winrates, label=f"Winrate vs {opp_name}")
+    plt.xlabel("Block Index (each block ~ 50 episodes)")
+    plt.ylabel("Win Rate")
+    plt.title(f"Self-Play Win Rates Over Blocks - {mode}")
+    plt.ylim([0, 1])
+    plt.grid(True)
+    plt.legend()
+    out_file = os.path.join(save_path, f"selfplay_opponent_winrates_{mode}.png")
+    plt.savefig(out_file)
+    plt.close()
+    print(f"Saved self-play opponent winrates plot to {out_file}")
+
 # ============================================
 # Logging Setup
 # ============================================
@@ -494,42 +523,16 @@ def main(
 
     save_training_info(training_config, mode, mixed_cycle, opponent_agent_paths, results_dir)
 
-    # Initialize agent and replay buffers
-    if mode == "self_play":
-        current_env_mode = h_env.Mode.NORMAL
-        agent = agent_class(state_dim=state_dim, action_dim=action_dim, max_action=max_action, training_config=training_config)
-        if load_agent_path is not None:
-            logging.info(f"Loading main agent from: {load_agent_path}")
-            agent.load(load_agent_path)
-        opponent = TrainedOpponent(copy.deepcopy(agent), training=False)
-        replay_buffer_main = ReplayBuffer(state_dim, action_dim, max_size=int(1e6))
-    else:
-        agent = agent_class(state_dim=state_dim, action_dim=action_dim, max_action=max_action, training_config=training_config)
-        if load_agent_path is not None:
-            logging.info(f"Loading agent from: {load_agent_path}")
-            agent.load(load_agent_path)
-        opponent = None
-        replay_buffer_main = ReplayBuffer(state_dim, action_dim, max_size=int(1e6))
-        if mode in ["vs_strong", "vs_weak", "mixed"]:
-            replay_buffer_opponent = ReplayBuffer(state_dim, action_dim, max_size=int(1e6))
-        else:
-            replay_buffer_opponent = None
+    # Initialize agent
+    agent = agent_class(state_dim=state_dim, action_dim=action_dim, max_action=max_action, training_config=training_config)
+    if load_agent_path is not None:
+        logging.info(f"Loading agent from: {load_agent_path}")
+        agent.load(load_agent_path)
 
-    # For mixed mode, load opponent agents if provided
-    opponent_agents = []
-    if mode == "mixed" and opponent_agent_paths:
-        for idx, path in enumerate(opponent_agent_paths):
-            logging.info(f"Loading opponent agent {idx + 1} from: {path}")
-            trained_agent = agent_class(state_dim=state_dim, action_dim=action_dim, max_action=max_action, training_config=training_config)
-            trained_agent.load(path)
-            trained_agent.critic.eval()
-            trained_agent.actor.eval()
-            trained_agent.actor_target.eval()
-            trained_agent.critic_target.eval()
-            opponent_agents.append(trained_agent)
-    elif mode == "self_play":
-        pass
+    # Replay Buffer for the main agent
+    replay_buffer_main = ReplayBuffer(state_dim, action_dim, max_size=int(1e6))
 
+    # For storing training results
     total_timesteps = 0
     evaluation_results = []
     loss_results = {"critic_loss": [], "actor_loss": []}
@@ -545,187 +548,394 @@ def main(
         "shooting": [],
         "defense": []
     }
-    if mode == "self_play":
-        evaluation_winrates["against_checkpoint"] = []
+
+    # If "mixed" mode, load possible trained opponents
+    opponent_agents = []
+    if mode == "mixed" and opponent_agent_paths:
+        for idx, path in enumerate(opponent_agent_paths):
+            logging.info(f"Loading opponent agent {idx + 1} from: {path}")
+            trained_agent = agent_class(state_dim=state_dim, action_dim=action_dim, max_action=max_action, training_config=training_config)
+            trained_agent.load(path)
+            trained_agent.critic.eval()
+            trained_agent.actor.eval()
+            trained_agent.actor_target.eval()
+            trained_agent.critic_target.eval()
+            opponent_agents.append(trained_agent)
 
     pbar = tqdm(total=episodes, desc=f"Training {mode} Seed {seed}")
 
+    # ==============================================
+    #   SELF-PLAY LOGIC WITH BLOCKS & WINRATE PLOTS
+    # ==============================================
     if mode == "self_play":
-        update_interval = training_config.get("update_eval_interval", 200)
-        update_eval_episodes = training_config.get("update_eval_episodes", 50)
-        update_threshold = training_config.get("update_accuracy_threshold", 0.8)
+        from collections import namedtuple
+        OpponentEntry = namedtuple("OpponentEntry", ["opponent", "name"])
 
-    for episode in range(1, episodes + 1):
+        # Opponent buffer
+        opponent_buffer = []
 
-        if mode == "self_play" and (episode % update_interval == 0):
-            stats_self = eval_policy_extended(
-                policy=agent, 
-                eval_episodes=update_eval_episodes, 
-                seed=seed+15, 
-                mode=h_env.Mode.NORMAL, 
-                opponent_type="trained", 
-                trained_agent=opponent.agent
-            )
-            current_win_rate = stats_self["win_rate"]
-            logging.info(f"Episode {episode}: Win rate against current opponent: {current_win_rate:.2f}")
-            if current_win_rate > update_threshold:
-                opponent = TrainedOpponent(copy.deepcopy(agent), training=False)
-                logging.info(f"Episode {episode}: Updated opponent due to high win rate ({current_win_rate:.2f})")
+        # Start with "weak"
+        weak_opp = get_opponent("weak", env)
+        opponent_buffer.append(OpponentEntry(opponent=weak_opp, name="weak"))
+        strong_added = False
 
+        # For storing block-based self-play WR
+        sp_winrate_history = {}  # {opp_name -> [list_of_winrates_per_block]}
+
+        def evaluate_vs_all_opponents(agent, buffer):
+            """
+            Evaluate the agent vs each opponent in 'buffer' for a certain number of episodes.
+            Return (average_win_rate, {opponent_name: opponent_wr}).
+            """
+            episodes_for_eval = 100
+            total_win_rates = 0.0
+            opp_win_rates = {}
+            count = 0
+
+            for opp_entry in buffer:
+                if isinstance(opp_entry.opponent, h_env.BasicOpponent):
+                    # "weak" or "strong"
+                    opp_name = opp_entry.name
+                    stats = eval_policy_extended(
+                        policy=agent,
+                        eval_episodes=episodes_for_eval,
+                        seed=seed + random.randint(0,10000),
+                        mode=h_env.Mode.NORMAL,
+                        opponent_type=opp_name
+                    )
+                else:
+                    # "trained" -> a self copy
+                    stats = eval_policy_extended(
+                        policy=agent,
+                        eval_episodes=episodes_for_eval,
+                        seed=seed + random.randint(0,10000),
+                        mode=h_env.Mode.NORMAL,
+                        opponent_type="trained",
+                        trained_agent=opp_entry.opponent.agent
+                    )
+                wr = stats["win_rate"]
+                opp_win_rates[opp_entry.name] = wr
+                total_win_rates += wr
+                count += 1
+
+            average_win_rate = total_win_rates / max(count, 1)
+            return average_win_rate, opp_win_rates
+
+        def pick_lowest_winrate_opponent(buffer, opp_win_rates):
+            """
+            Pick from the buffer the opponent that yields the lowest WR for the agent.
+            """
+            min_wr = float("inf")
+            min_name = None
+            for opp_entry in buffer:
+                name = opp_entry.name
+                if opp_win_rates[name] < min_wr:
+                    min_wr = opp_win_rates[name]
+                    min_name = name
+            # Return the OpponentEntry that corresponds to min_name
+            for opp_entry in buffer:
+                if opp_entry.name == min_name:
+                    return opp_entry
+            return buffer[0]  # fallback
+
+        block_size = 50
+        current_episode = 0
+
+        while current_episode < episodes:
+            # Evaluate vs all opponents
+            avg_wr, opp_wr_dict = evaluate_vs_all_opponents(agent, opponent_buffer)
+            logging.info(f"Evaluation vs Opponents at episode {current_episode}: {opp_wr_dict}, avg = {avg_wr:.2f}")
+
+            # Record these winrates in sp_winrate_history
+            # Each opponent's WR is appended as a new data point for the block
+            for opp_name, wr in opp_wr_dict.items():
+                sp_winrate_history.setdefault(opp_name, []).append(wr)
+
+            # Condition to add strong
+            if (not strong_added) and avg_wr > 0.80:
+                strong_opp = get_opponent("strong", env)
+                opponent_buffer.append(OpponentEntry(opponent=strong_opp, name="strong"))
+                strong_added = True
+                logging.warning("WARNING: Added 'strong' opponent to the buffer!")
+
+            # Condition to add self-copy (if strong is already there)
+            if strong_added and avg_wr > 0.80:
+                # add a copy of the current agent
+                copy_of_agent = copy.deepcopy(agent)
+                new_opp_name = f"self_copy_{current_episode}"
+                new_opp = TrainedOpponent(copy_of_agent, training=False, name=new_opp_name)
+                opponent_buffer.append(OpponentEntry(opponent=new_opp, name=new_opp_name))
+                logging.warning(f"WARNING: Added a new self-copy opponent: {new_opp_name}")
+
+            # Re-evaluate to pick the lowest-WR opponent
+            avg_wr, opp_wr_dict = evaluate_vs_all_opponents(agent, opponent_buffer)
+            # Again record in sp_winrate_history for consistency
+            for opp_name, wr in opp_wr_dict.items():
+                sp_winrate_history.setdefault(opp_name, []).append(wr)
+
+            chosen_opp_entry = pick_lowest_winrate_opponent(opponent_buffer, opp_wr_dict)
+            logging.info(f"Chosen Opponent for next {block_size} episodes: {chosen_opp_entry.name} (WR={opp_wr_dict[chosen_opp_entry.name]:.2f})")
+
+            # Train for the next block_size episodes
+            block_count = 0
+            while block_count < block_size and current_episode < episodes:
+                if env.env.mode != h_env.Mode.NORMAL:
+                    env.close()
+                    env = CustomHockeyEnv(mode=h_env.Mode.NORMAL)
+                    env.seed(seed + current_episode)
+
+                state, info = env.reset()
+                done = False
+                episode_reward_main = 0
+                episode_timesteps = 0
+
+                if training_config["expl_noise_type"].lower() == "ou" and hasattr(agent, 'ou_noise'):
+                    agent.ou_noise.reset()
+                if training_config["expl_noise_type"].lower() == "pink" and hasattr(agent, 'pink_noise'):
+                    agent.pink_noise.reset()
+
+                cumulative_critic_loss = 0.0
+                cumulative_actor_loss = 0.0
+                loss_steps = 0
+
+                while not done:
+                    episode_timesteps += 1
+                    total_timesteps += 1
+
+                    if total_timesteps < training_config["start_timesteps"]:
+                        action = env.env.action_space.sample()[:action_dim]
+                    else:
+                        action = agent.act(np.array(state))
+
+                    # Opponent action
+                    if isinstance(chosen_opp_entry.opponent, h_env.BasicOpponent):
+                        opponent_action = chosen_opp_entry.opponent.act(env.env.obs_agent_two())
+                    else:
+                        opponent_obs = env.env.obs_agent_two()
+                        opponent_action = chosen_opp_entry.opponent.act(opponent_obs)
+
+                    full_action = np.hstack([action, opponent_action])
+                    next_state, reward, done, info = env.step(full_action)
+                    done_bool = float(done) if episode_timesteps < training_config["max_episode_steps"] else 0
+
+                    replay_buffer_main.add(state, action, next_state, reward, done_bool)
+                    state = next_state
+                    episode_reward_main += reward
+
+                    # Train main agent
+                    if total_timesteps >= training_config["start_timesteps"]:
+                        critic_loss, actor_loss = agent.train(replay_buffer_main, training_config["batch_size"])
+                        cumulative_critic_loss += critic_loss
+                        if actor_loss is not None:
+                            cumulative_actor_loss += actor_loss
+                            loss_steps += 1
+
+                avg_critic_loss = cumulative_critic_loss / loss_steps if loss_steps > 0 else 0
+                avg_actor_loss = cumulative_actor_loss / loss_steps if loss_steps > 0 else 0
+                loss_results["critic_loss"].append(avg_critic_loss)
+                loss_results["actor_loss"].append(avg_actor_loss)
+                evaluation_results.append(episode_reward_main)
+                plot_data["evaluation_results"].append(episode_reward_main)
+                logging.info(f"[Episode {current_episode+1}] Reward: {episode_reward_main:.2f} | "
+                             f"Opponent: {chosen_opp_entry.name} | "
+                             f"Critic Loss: {avg_critic_loss:.4f} | Actor Loss: {avg_actor_loss:.4f}")
+
+                block_count += 1
+                current_episode += 1
+                pbar.update(1)
+
+                # Intermediate evaluations / save
+                if (current_episode % training_config["eval_freq"] == 0) or (current_episode == episodes):
+                    logging.info(f"===== Intermediate Evaluation at Episode {current_episode} =====")
+                    stats_strong = eval_policy_extended(policy=agent, eval_episodes=30, seed=seed+10,
+                                                        mode=h_env.Mode.NORMAL, opponent_type="strong")
+                    evaluation_winrates["strong"].append(stats_strong["win_rate"])
+                    logging.info(f"  vs Strong  => WinRate: {stats_strong['win_rate']:.2f}")
+
+                    stats_weak = eval_policy_extended(policy=agent, eval_episodes=30, seed=seed+20,
+                                                      mode=h_env.Mode.NORMAL, opponent_type="weak")
+                    evaluation_winrates["weak"].append(stats_weak["win_rate"])
+                    logging.info(f"  vs Weak    => WinRate: {stats_weak['win_rate']:.2f}")
+
+                    stats_shooting = eval_policy_extended(policy=agent, eval_episodes=30, seed=seed+30,
+                                                          mode=h_env.Mode.TRAIN_SHOOTING, opponent_type=None)
+                    evaluation_winrates["shooting"].append(stats_shooting["win_rate"])
+                    logging.info(f"  Shooting   => WinRate: {stats_shooting['win_rate']:.2f}")
+
+                    stats_defense = eval_policy_extended(policy=agent, eval_episodes=30, seed=seed+40,
+                                                         mode=h_env.Mode.TRAIN_DEFENSE, opponent_type=None)
+                    evaluation_winrates["defense"].append(stats_defense["win_rate"])
+                    logging.info(f"  Defense    => WinRate: {stats_defense['win_rate']:.2f}")
+
+                    np.save(os.path.join(results_dir, f"{file_name}_evaluations.npy"), np.array(evaluation_results))
+                    np.save(os.path.join(results_dir, f"{file_name}_winrates.npy"), evaluation_winrates)
+                    with open(os.path.join(results_dir, f"{file_name}_plot_data.json"), "w") as f:
+                        json.dump(plot_data, f, indent=4)
+
+                    if save_model and (current_episode % training_config["save_model_freq"] == 0):
+                        agent.save(os.path.join(models_dir, f"{file_name}_episode_{current_episode}.pth"))
+                        logging.info(f"Saved model at episode {current_episode}")
+
+        # Done with all episodes in self-play
+        pbar.close()
+
+        # After finishing, let's plot the self-play WRs
+        plot_selfplay_opponent_winrates(sp_winrate_history, results_dir, mode)
+
+    # ================================
+    # Other modes (unchanged logic)
+    # ================================
+    else:
         if mode in ["vs_strong", "vs_weak", "mixed"]:
-            if mode == "mixed":
-                idx = (episode - 1) % len(mixed_cycle)
-                cycle_opponent_type, cycle_env_mode = mixed_cycle[idx]
-                if cycle_opponent_type == "trained" and len(opponent_agents) > 0:
-                    trained_idx = get_trained_opponent_index(episode, len(opponent_agents))
-                    opponent_type = "trained"
-                    current_env_mode = cycle_env_mode
-                    selected_trained_agent = opponent_agents[trained_idx]
+            replay_buffer_opponent = ReplayBuffer(state_dim, action_dim, max_size=int(1e6))
+        else:
+            replay_buffer_opponent = None
+
+        opponent = None
+        if mode == "mixed" and opponent_agent_paths:
+            for idx, path in enumerate(opponent_agent_paths):
+                logging.info(f"Loading opponent agent {idx + 1} from: {path}")
+                trained_agent = agent_class(state_dim=state_dim, action_dim=action_dim, max_action=max_action, training_config=training_config)
+                trained_agent.load(path)
+                trained_agent.critic.eval()
+                trained_agent.actor.eval()
+                trained_agent.actor_target.eval()
+                trained_agent.critic_target.eval()
+                opponent_agents.append(trained_agent)
+
+        for episode in range(1, episodes + 1):
+            if mode in ["vs_strong", "vs_weak", "mixed"]:
+                if mode == "mixed":
+                    idx = (episode - 1) % len(mixed_cycle)
+                    cycle_opponent_type, cycle_env_mode = mixed_cycle[idx]
+                    if cycle_opponent_type == "trained" and len(opponent_agents) > 0:
+                        trained_idx = get_trained_opponent_index(episode, len(opponent_agents))
+                        opponent_type = "trained"
+                        current_env_mode = cycle_env_mode
+                        selected_trained_agent = opponent_agents[trained_idx]
+                    else:
+                        opponent_type = cycle_opponent_type
+                        current_env_mode = cycle_env_mode
+                        selected_trained_agent = None
                 else:
-                    opponent_type = cycle_opponent_type
-                    current_env_mode = cycle_env_mode
+                    opponent_type = "strong" if mode == "vs_strong" else "weak"
+                    current_env_mode = env_mode
                     selected_trained_agent = None
-            else:
-                opponent_type = "strong" if mode == "vs_strong" else "weak"
-                current_env_mode = env_mode
-                selected_trained_agent = None
 
-            if opponent_type in ["strong", "weak", "trained"]:
-                if mode == "self_play":
-                    opponent = TrainedOpponent(opponent.agent, training=False)
-                else:
+                if opponent_type in ["strong", "weak", "trained"]:
                     opponent = get_opponent(opponent_type, env, trained_agent=selected_trained_agent)
-            else:
-                opponent = None
+                else:
+                    opponent = None
 
-        if env.env.mode != current_env_mode:
-            env.close()
-            env = CustomHockeyEnv(mode=current_env_mode)
-            env.seed(seed + episode)
-            logging.info(f"Switched environment mode to: {current_env_mode}")
+                if env.env.mode != current_env_mode:
+                    env.close()
+                    env = CustomHockeyEnv(mode=current_env_mode)
+                    env.seed(seed + episode)
 
-        state, info = env.reset()
-        done = False
-        episode_reward_main = 0
-        episode_timesteps = 0
+            state, info = env.reset()
+            done = False
+            episode_reward_main = 0
+            episode_timesteps = 0
 
-        if training_config["expl_noise_type"].lower() == "ou" and hasattr(agent, 'ou_noise'):
-            agent.ou_noise.reset()
-        if training_config["expl_noise_type"].lower() == "pink" and hasattr(agent, 'pink_noise'):
-            agent.pink_noise.reset()
+            if training_config["expl_noise_type"].lower() == "ou" and hasattr(agent, 'ou_noise'):
+                agent.ou_noise.reset()
+            if training_config["expl_noise_type"].lower() == "pink" and hasattr(agent, 'pink_noise'):
+                agent.pink_noise.reset()
 
-        cumulative_critic_loss = 0.0
-        cumulative_actor_loss = 0.0
-        loss_steps = 0
+            cumulative_critic_loss = 0.0
+            cumulative_actor_loss = 0.0
+            loss_steps = 0
 
-        while not done:
-            episode_timesteps += 1
-            total_timesteps += 1
+            while not done:
+                episode_timesteps += 1
+                total_timesteps += 1
 
-            if total_timesteps < training_config["start_timesteps"]:
-                action = env.env.action_space.sample()[:action_dim]
-            else:
-                action = agent.act(np.array(state))
+                if total_timesteps < training_config["start_timesteps"]:
+                    action = env.env.action_space.sample()[:action_dim]
+                else:
+                    action = agent.act(np.array(state))
 
-            if opponent is not None:
-                opponent_obs = env.env.obs_agent_two()
-                opponent_action = opponent.act(opponent_obs)
-            else:
-                opponent_action = np.array([0, 0, 0, 0], dtype=np.float32)
+                if opponent is not None:
+                    if isinstance(opponent, h_env.BasicOpponent):
+                        opponent_action = opponent.act(env.env.obs_agent_two())
+                    else:
+                        opponent_obs = env.env.obs_agent_two()
+                        opponent_action = opponent.act(opponent_obs)
+                else:
+                    opponent_action = np.array([0, 0, 0, 0], dtype=np.float32)
 
-            full_action = np.hstack([action, opponent_action])
-            next_state, reward, done, info = env.step(full_action)
-            done_bool = float(done) if episode_timesteps < training_config["max_episode_steps"] else 0
+                full_action = np.hstack([action, opponent_action])
+                next_state, reward, done, info = env.step(full_action)
+                done_bool = float(done) if episode_timesteps < training_config["max_episode_steps"] else 0
 
-            replay_buffer_main.add(state, action, next_state, reward, done_bool)
-            state = next_state
-            episode_reward_main += reward
+                replay_buffer_main.add(state, action, next_state, reward, done_bool)
+                state = next_state
+                episode_reward_main += reward
 
-            if total_timesteps >= training_config["start_timesteps"]:
-                critic_loss, actor_loss = agent.train(replay_buffer_main, training_config["batch_size"])
-                cumulative_critic_loss += critic_loss
-                if actor_loss is not None:
-                    cumulative_actor_loss += actor_loss
-                    loss_steps += 1
+                if total_timesteps >= training_config["start_timesteps"]:
+                    critic_loss, actor_loss = agent.train(replay_buffer_main, training_config["batch_size"])
+                    cumulative_critic_loss += critic_loss
+                    if actor_loss is not None:
+                        cumulative_actor_loss += actor_loss
+                        loss_steps += 1
 
-        avg_critic_loss = cumulative_critic_loss / loss_steps if loss_steps > 0 else 0
-        avg_actor_loss = cumulative_actor_loss / loss_steps if loss_steps > 0 else 0
-        loss_results["critic_loss"].append(avg_critic_loss)
-        loss_results["actor_loss"].append(avg_actor_loss)
-        evaluation_results.append(episode_reward_main)
-        plot_data["evaluation_results"].append(episode_reward_main)
-        logging.info(f"Episode {episode} | Reward: {episode_reward_main:.2f} | Critic Loss: {avg_critic_loss:.4f} | Actor Loss: {avg_actor_loss:.4f}")
+            avg_critic_loss = cumulative_critic_loss / loss_steps if loss_steps > 0 else 0
+            avg_actor_loss = cumulative_actor_loss / loss_steps if loss_steps > 0 else 0
+            loss_results["critic_loss"].append(avg_critic_loss)
+            loss_results["actor_loss"].append(avg_actor_loss)
+            evaluation_results.append(episode_reward_main)
+            plot_data["evaluation_results"].append(episode_reward_main)
+            logging.info(f"Episode {episode} | Reward: {episode_reward_main:.2f} | Critic Loss: {avg_critic_loss:.4f} | Actor Loss: {avg_actor_loss:.4f}")
 
-        if episode % training_config["eval_freq"] == 0:
-            logging.info(f"===== Evaluation at Episode {episode} =====")
-            stats_strong = eval_policy_extended(policy=agent, eval_episodes=100, seed=seed+10, mode=h_env.Mode.NORMAL, opponent_type="strong")
-            evaluation_winrates["strong"].append(stats_strong["win_rate"])
-            logging.info(f"  vs Strong  => WinRate: {stats_strong['win_rate']:.2f}")
-            print(f"  vs Strong  => WinRate: {stats_strong['win_rate']:.2f}")
+            if episode % training_config["eval_freq"] == 0:
+                logging.info(f"===== Evaluation at Episode {episode} =====")
+                stats_strong = eval_policy_extended(policy=agent, eval_episodes=100, seed=seed+10, mode=h_env.Mode.NORMAL, opponent_type="strong")
+                evaluation_winrates["strong"].append(stats_strong["win_rate"])
+                logging.info(f"  vs Strong  => WinRate: {stats_strong['win_rate']:.2f}")
+                print(f"  vs Strong  => WinRate: {stats_strong['win_rate']:.2f}")
 
-            stats_weak = eval_policy_extended(policy=agent, eval_episodes=100, seed=seed+20, mode=h_env.Mode.NORMAL, opponent_type="weak")
-            evaluation_winrates["weak"].append(stats_weak["win_rate"])
-            logging.info(f"  vs Weak    => WinRate: {stats_weak['win_rate']:.2f}")
-            print(f"  vs Weak    => WinRate: {stats_weak['win_rate']:.2f}")
+                stats_weak = eval_policy_extended(policy=agent, eval_episodes=100, seed=seed+20, mode=h_env.Mode.NORMAL, opponent_type="weak")
+                evaluation_winrates["weak"].append(stats_weak["win_rate"])
+                logging.info(f"  vs Weak    => WinRate: {stats_weak['win_rate']:.2f}")
+                print(f"  vs Weak    => WinRate: {stats_weak['win_rate']:.2f}")
 
-            if mode == "self_play":
-                stats_self = eval_policy_extended(policy=agent, eval_episodes=100, seed=seed+15, mode=h_env.Mode.NORMAL, opponent_type="trained", trained_agent=opponent.agent)
-                evaluation_winrates["against_checkpoint"].append(stats_self["win_rate"])
-                logging.info(f"  vs Checkpoint Opponent  => WinRate: {stats_self['win_rate']:.2f}")
-                print(f"  vs Checkpoint Opponent  => WinRate: {stats_self['win_rate']:.2f}")
+                stats_shooting = eval_policy_extended(policy=agent, eval_episodes=100, seed=seed+30, mode=h_env.Mode.TRAIN_SHOOTING, opponent_type=None)
+                evaluation_winrates["shooting"].append(stats_shooting["win_rate"])
+                logging.info(f"  Shooting   => WinRate: {stats_shooting['win_rate']:.2f}")
+                print(f"  Shooting   => WinRate: {stats_shooting['win_rate']:.2f}")
 
-            stats_shooting = eval_policy_extended(policy=agent, eval_episodes=100, seed=seed+30, mode=h_env.Mode.TRAIN_SHOOTING, opponent_type=None)
-            evaluation_winrates["shooting"].append(stats_shooting["win_rate"])
-            logging.info(f"  Shooting   => WinRate: {stats_shooting['win_rate']:.2f}")
-            print(f"  Shooting   => WinRate: {stats_shooting['win_rate']:.2f}")
+                stats_defense = eval_policy_extended(policy=agent, eval_episodes=100, seed=seed+40, mode=h_env.Mode.TRAIN_DEFENSE, opponent_type=None)
+                evaluation_winrates["defense"].append(stats_defense["win_rate"])
+                logging.info(f"  Defense    => WinRate: {stats_defense['win_rate']:.2f}")
+                print(f"  Defense    => WinRate: {stats_defense['win_rate']:.2f}")
 
-            stats_defense = eval_policy_extended(policy=agent, eval_episodes=100, seed=seed+40, mode=h_env.Mode.TRAIN_DEFENSE, opponent_type=None)
-            evaluation_winrates["defense"].append(stats_defense["win_rate"])
-            logging.info(f"  Defense    => WinRate: {stats_defense['win_rate']:.2f}")
-            print(f"  Defense    => WinRate: {stats_defense['win_rate']:.2f}")
+                np.save(os.path.join(results_dir, f"{file_name}_evaluations.npy"), np.array(evaluation_results))
+                np.save(os.path.join(results_dir, f"{file_name}_winrates.npy"), evaluation_winrates)
+                with open(os.path.join(results_dir, f"{file_name}_plot_data.json"), "w") as f:
+                    json.dump(plot_data, f, indent=4)
 
-            np.save(os.path.join(results_dir, f"{file_name}_evaluations.npy"), np.array(evaluation_results))
-            np.save(os.path.join(results_dir, f"{file_name}_winrates.npy"), evaluation_winrates)
-            with open(os.path.join(results_dir, f"{file_name}_plot_data.json"), "w") as f:
-                json.dump(plot_data, f, indent=4)
+                if save_model and (episode % training_config["save_model_freq"] == 0):
+                    agent.save(os.path.join(models_dir, f"{file_name}_episode_{episode}.pth"))
+                    logging.info(f"Saved model at episode {episode}")
 
-            if save_model and (episode % training_config["save_model_freq"] == 0):
-                agent.save(os.path.join(models_dir, f"{file_name}_episode_{episode}.pth"))
-                if mode == "self_play":
-                    opponent.agent.save(os.path.join(models_dir, f"{file_name}_opponent_episode_{episode}.pth"))
-                logging.info(f"Saved model at episode {episode}")
-                if mode == "self_play":
-                    logging.info(f"Saved opponent model at episode {episode}")
+        pbar.close()
 
-        pbar.update(1)
-    pbar.close()
-
+    # Save final model
     if save_model:
         agent.save(os.path.join(models_dir, f"{file_name}_final.pth"))
         logging.info(f"Saved final main model to {models_dir}")
-        if mode == "self_play":
-            opponent.agent.save(os.path.join(models_dir, f"{file_name}_opponent_final.pth"))
-            logging.info(f"Saved final opponent model to {models_dir}")
 
+    # Plot losses and rewards
     plot_losses(loss_results, None, mode, results_dir)
     plot_rewards(evaluation_results, None, mode, results_dir, window=20)
     if len(evaluation_winrates.get("strong", [])) > 0:
         plot_multi_winrate_curves(evaluation_winrates, mode, results_dir)
     plot_noise_comparison(agent, training_config, mode, results_dir)
 
+    # Final extended evaluation
     logging.info("\n===== Final Extended Evaluation (100 episodes each scenario) =====")
     final_stats_strong = eval_policy_extended(agent, mode=h_env.Mode.NORMAL, opponent_type="strong", seed=seed+100)
     final_stats_weak = eval_policy_extended(agent, mode=h_env.Mode.NORMAL, opponent_type="weak", seed=seed+200)
-    if mode == "mixed" and len(opponent_agents) > 0:
-        for idx, trained_agent in enumerate(opponent_agents):
-            final_stats_trained = eval_policy_extended(agent, mode=h_env.Mode.NORMAL, opponent_type="trained", seed=seed+250+idx, trained_agent=trained_agent)
-            logging.info(f"  vs Trained_{idx + 1} => WinRate: {final_stats_trained['win_rate']:.2f}")
-            print(f"  vs Trained_{idx + 1} => WinRate: {final_stats_trained['win_rate']:.2f}")
-    if mode == "self_play":
-        final_stats_self = eval_policy_extended(agent, mode=h_env.Mode.NORMAL, opponent_type="trained", seed=seed+350, trained_agent=opponent.agent)
-        logging.info(f"  vs Self    => WinRate: {final_stats_self['win_rate']:.2f}")
-        print(f"  vs Self    => WinRate: {final_stats_self['win_rate']:.2f}")
-
     final_stats_shooting = eval_policy_extended(agent, mode=h_env.Mode.TRAIN_SHOOTING, opponent_type=None, seed=seed+300)
     final_stats_defense = eval_policy_extended(agent, mode=h_env.Mode.TRAIN_DEFENSE, opponent_type=None, seed=seed+400)
 
@@ -733,32 +943,26 @@ def main(
     logging.info(f"  vs Weak    => WinRate: {final_stats_weak['win_rate']:.2f}")
     logging.info(f"  Shooting   => WinRate: {final_stats_shooting['win_rate']:.2f}")
     logging.info(f"  Defense    => WinRate: {final_stats_defense['win_rate']:.2f}")
-    if mode == "self_play":
-        logging.info(f"  vs Self    => WinRate: {final_stats_self['win_rate']:.2f}")
 
     final_evaluation_results = {
         "final_eval_strong": final_stats_strong,
         "final_eval_weak": final_stats_weak,
         "final_eval_shooting": final_stats_shooting,
         "final_eval_defense": final_stats_defense,
-    }
-    if mode == "mixed" and len(opponent_agents) > 0:
-        for idx, trained_agent in enumerate(opponent_agents):
-            key = f"final_eval_trained_{idx + 1}"
-            final_evaluation_results[key] = eval_policy_extended(agent, mode=h_env.Mode.NORMAL, opponent_type="trained", seed=seed+250+idx, trained_agent=trained_agent)
-            logging.info(f"  vs Trained_{idx + 1} => WinRate: {final_evaluation_results[key]['win_rate']:.2f}")
-            print(f"  vs Trained_{idx + 1} => WinRate: {final_evaluation_results[key]['win_rate']:.2f}")
-    if mode == "self_play":
-        final_evaluation_results["final_eval_self_play"] = final_stats_self
-
-    final_evaluation_results.update({
         "loss_results": loss_results,
         "training_rewards": evaluation_results,
         "winrates_vs_scenarios": evaluation_winrates
-    })
+    }
 
-    if len(evaluation_winrates.get("strong", [])) > 0:
-        plot_multi_winrate_curves(evaluation_winrates, mode, results_dir)
+    # If mixed mode with loaded opponents, evaluate vs each
+    if mode == "mixed" and len(opponent_agents) > 0:
+        for idx, trained_agent in enumerate(opponent_agents):
+            key = f"final_eval_trained_{idx + 1}"
+            final_evaluation_results[key] = eval_policy_extended(agent, mode=h_env.Mode.NORMAL,
+                                                                 opponent_type="trained",
+                                                                 seed=seed+250+idx,
+                                                                 trained_agent=trained_agent)
+            logging.info(f"  vs Trained_{idx + 1} => WinRate: {final_evaluation_results[key]['win_rate']:.2f}")
 
     with open(os.path.join(results_dir, f"{file_name}_final_evaluations.json"), "w") as f:
         json.dump(final_evaluation_results, f, indent=4)
@@ -785,8 +989,8 @@ if __name__ == "__main__":
                         help="List of paths for opponent agent checkpoints (for mixed mode)")
 
     # New arguments for configuring exploration noise
-    parser.add_argument("--expl_noise_type", type=str, choices=["pink", "ou", "none"], default="pink",
-                        help="Exploration noise type: pink, ou, or none (to disable noise)")
+    parser.add_argument("--expl_noise_type", type=str, choices=["pink", "ou", "none", "gaussian"], default="pink",
+                        help="Exploration noise type: pink, ou, gaussian or none (to disable noise)")
     parser.add_argument("--expl_noise", type=float, default=0.1, help="Exploration noise scale")
     parser.add_argument("--pink_noise_exponent", type=float, default=1.0, help="Exponent for pink noise (if used)")
     parser.add_argument("--pink_noise_fmin", type=float, default=0.0, help="Minimum frequency for pink noise (if used)")
@@ -817,55 +1021,58 @@ if __name__ == "__main__":
         custom_training_config = {}
 
     training_config = {
-            "discount": 0.99,
-            "tau": 0.005,
-            "policy_noise": 0.2,
-            "noise_clip": 0.5,
-            "policy_freq": 2,
-            "start_timesteps": 1000,
-            "eval_freq": 100,
-            "batch_size": 2048,
-            "expl_noise_type": "pink",
-            "expl_noise": 0.1,
-            "pink_noise_params": {"exponent": 1.0, "fmin": 0.0},
-            "ou_noise_params": {"mu": 0.0, "theta": 0.15, "sigma": 0.2},
-            "use_layer_norm": True,
-            "ln_eps": 1e-5,
-            "save_model": True,
-            "save_model_freq": 10000,
-            "use_rnd": True,
-            "rnd_weight": 1.0,
-            "rnd_lr": 1e-4,
-            "rnd_hidden_dim": 128,
-            "max_episode_steps": 600,
-            "update_eval_interval": 200,
-            "update_eval_episodes": 50,
-            "update_accuracy_threshold": 0.8
-        }
-    
-   
-    # Update the training configuration with command-line arguments for noise, RND, and layer norm.
-    custom_training_config["expl_noise_type"] = args.expl_noise_type
-    custom_training_config["expl_noise"] = args.expl_noise
-    custom_training_config["pink_noise_params"] = {"exponent": args.pink_noise_exponent, "fmin": args.pink_noise_fmin}
-    # Optionally, you could add ou_noise_params if needed.
-    custom_training_config["use_rnd"] = args.use_rnd
-    custom_training_config["rnd_weight"] = args.rnd_weight
-    custom_training_config["rnd_lr"] = args.rnd_lr
-    custom_training_config["rnd_hidden_dim"] = args.rnd_hidden_dim
-    custom_training_config["use_layer_norm"] = args.use_layer_norm
-    custom_training_config["ln_eps"] = args.ln_eps
+        "discount": 0.99,
+        "tau": 0.005,
+        "policy_noise": 0.2,
+        "noise_clip": 0.5,
+        "policy_freq": 2,
+        "start_timesteps": 1000,
+        "eval_freq": 100,
+        "batch_size": 2048,
+        "expl_noise_type": "pink",
+        "expl_noise": 0.1,
+        "pink_noise_params": {"exponent": 1.0, "fmin": 0.0},
+        "ou_noise_params": {"mu": 0.0, "theta": 0.15, "sigma": 0.2},
+        "use_layer_norm": True,
+        "ln_eps": 1e-5,
+        "save_model": True,
+        "save_model_freq": 10000,
+        "use_rnd": True,
+        "rnd_weight": 1.0,
+        "rnd_lr": 1e-4,
+        "rnd_hidden_dim": 128,
+        "max_episode_steps": 600,
+        # The old self-play parameters are superseded by our new block-based approach
+        "update_eval_interval": 200,
+        "update_eval_episodes": 50,
+        "update_accuracy_threshold": 0.8
+    }
 
-     # if it is in args, update the training configuration with the provided values
+    # Override training_config with custom JSON config (if any)
     training_config.update(custom_training_config)
+
+    # Override with command-line arguments for noise, RND, layer norm
+    training_config["expl_noise_type"] = args.expl_noise_type
+    training_config["expl_noise"] = args.expl_noise
+    training_config["pink_noise_params"] = {
+        "exponent": args.pink_noise_exponent,
+        "fmin": args.pink_noise_fmin
+    }
+    training_config["use_rnd"] = args.use_rnd
+    training_config["rnd_weight"] = args.rnd_weight
+    training_config["rnd_lr"] = args.rnd_lr
+    training_config["rnd_hidden_dim"] = args.rnd_hidden_dim
+    training_config["use_layer_norm"] = args.use_layer_norm
+    training_config["ln_eps"] = args.ln_eps
+
     print("===== Training Configuration =====")
     print(json.dumps(training_config, indent=4))
 
-    # Dynamically load the agent class based on the argument
-    agent_class = get_agent_class(args.agent_class)
+    # Dynamically load the agent class
+    agent_cls = get_agent_class(args.agent_class)
 
     final_results = main(
-        agent_class=agent_class,
+        agent_class=agent_cls,
         mode=args.mode,
         episodes=args.episodes,
         seed=args.seed,

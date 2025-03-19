@@ -21,15 +21,15 @@
 #   chmod +x run_noise_experiment.sh
 
 # -----------------------------
-# Group 0: No noise
+# Group 0: Gaussian noise
 # -----------------------------
-echo "Running experiment 1: No noise (expl_noise_type set to 'none')"
+echo "Running experiment 1: No noise (expl_noise_type set to 'gaussian')"
 python hockey-run.py \
-    --mode vs_strong \
-    --episodes 5000 \
+    --mode vs_weak \
+    --episodes 15000 \
     --seed 42 \
     --save_model \
-    --expl_noise_type none \
+    --expl_noise_type gaussian \
     --agent_class src.td3:TD3 \
     --no_rnd \
     --no_layer_norm
@@ -39,8 +39,8 @@ python hockey-run.py \
 # -----------------------------
 echo "Running experiment 1.5: OU noise"
 python hockey-run.py \
-    --mode vs_strong \
-    --episodes 5000 \
+    --mode vs_weak \
+    --episodes 15000 \
     --seed 43 \
     --save_model \
     --expl_noise_type ou \
@@ -56,8 +56,8 @@ echo "Group 1: Pink noise (exponent=1) with different fmin values"
 # Experiment 2: fmin = 0.0
 echo "Running experiment 2: Pink noise with exponent=1 and pink_noise_fmin=0.0"
 python hockey-run.py \
-    --mode vs_strong \
-    --episodes 5000 \
+    --mode vs_weak \
+    --episodes 15000 \
     --seed 44 \
     --save_model \
     --expl_noise_type pink \
@@ -71,8 +71,8 @@ python hockey-run.py \
 # Experiment 3: fmin = 0.1
 echo "Running experiment 3: Pink noise with exponent=1 and pink_noise_fmin=0.1"
 python hockey-run.py \
-    --mode vs_strong \
-    --episodes 5000 \
+    --mode vs_weak \
+    --episodes 15000 \
     --seed 45 \
     --save_model \
     --expl_noise_type pink \
@@ -86,8 +86,8 @@ python hockey-run.py \
 # Experiment 4: fmin = 0.2
 echo "Running experiment 4: Pink noise with exponent=1 and pink_noise_fmin=0.2"
 python hockey-run.py \
-    --mode vs_strong \
-    --episodes 5000 \
+    --mode self_play \
+    --episodes 15000 \
     --seed 46 \
     --save_model \
     --expl_noise_type pink \
@@ -106,8 +106,8 @@ echo "Group 2: Different exponents (noise colors) with fixed pink_noise_fmin=0.0
 # Experiment 5: Exponent = 0.5 (shallower than pink noise)
 echo "Running experiment 5: Noise with exponent=0.5 and pink_noise_fmin=0.0"
 python hockey-run.py \
-    --mode vs_strong \
-    --episodes 5000 \
+    --mode vs_weak \
+    --episodes 15000 \
     --seed 47 \
     --save_model \
     --expl_noise_type pink \
@@ -121,8 +121,8 @@ python hockey-run.py \
 # Experiment 6: Exponent = 1.5 (steeper, akin to brown noise)
 echo "Running experiment 6: Noise with exponent=1.5 and pink_noise_fmin=0.0"
 python hockey-run.py \
-    --mode vs_strong \
-    --episodes 5000 \
+    --mode vs_weak \
+    --episodes 15000 \
     --seed 48 \
     --save_model \
     --expl_noise_type pink \
